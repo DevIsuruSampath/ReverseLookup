@@ -9,8 +9,9 @@ import asyncio
 import aiohttp
 import json
 import re
+import socket
 import sys
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Tuple
 from urllib.parse import quote, urlencode
 import time
 
@@ -267,15 +268,36 @@ def validate_ip(ip: str) -> bool:
     return False
 
 
+def validate_domain(domain: str) -> bool:
+    """Validate domain name format"""
+    if not domain:
+        return False
+    domain_pattern = r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+    return bool(re.match(domain_pattern, domain))
+
+
+def resolve_domain(domain: str) -> Tuple[bool, str]:
+    """Resolve domain to IP address"""
+    try:
+        # Get the first A record
+        ip = socket.gethostbyname(domain)
+        return True, ip
+    except socket.gaierror as e:
+        return False, f"DNS resolution failed: {e}"
+    except Exception as e:
+        return False, f"Error: {e}"
+
+
 async def main():
     parser = argparse.ArgumentParser(
-        description='Reverse IP Lookup - Find all domains on an IP',
+        description='Reverse IP Lookup - Find all domains on an IP or from a domain',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s 8.8.8.8
+  %(prog)s google.com
   %(prog)s 8.8.8.8 --limit 50
-  %(prog)s 8.8.8.8 --sources viewdns bing --output results.json
+  %(prog)s google.com --sources viewdns bing --output results.json
   %(prog)s 8.8.8.8 --format json --output domains.json
 
 Sources:
@@ -287,7 +309,7 @@ Sources:
         """
     )
 
-    parser.add_argument('ip', help='IP address to lookup')
+    parser.add_argument('target', help='IP address or domain to lookup')
     parser.add_argument('--limit', '-l', type=int,
                         help='Limit number of results (default: unlimited)')
     parser.add_argument('--output', '-o', type=str,
@@ -300,14 +322,33 @@ Sources:
 
     args = parser.parse_args()
 
-    # Validate IP
-    if not validate_ip(args.ip):
-        print(f"❌ Invalid IP address: {args.ip}")
+    # Determine if target is IP or domain
+    target_ip = args.target
+    is_domain = False
+
+    if validate_ip(args.target):
+        # It's an IP address
+        target_ip = args.target
+        print(f"📍 Target: {args.target} (IP address)")
+    elif validate_domain(args.target):
+        # It's a domain - resolve to IP
+        is_domain = True
+        print(f"🔗 Resolving domain: {args.target}")
+
+        success, result = resolve_domain(args.target)
+        if not success:
+            print(f"❌ {result}")
+            sys.exit(1)
+
+        target_ip = result
+        print(f"✅ Resolved to: {target_ip}")
+    else:
+        print(f"❌ Invalid IP address or domain: {args.target}")
         sys.exit(1)
 
     # Perform lookup
     async with ReverseLookup(args.output, args.format) as lookup:
-        domains = await lookup.lookup(args.ip, args.sources, args.limit)
+        domains = await lookup.lookup(target_ip, args.sources, args.limit)
 
     # Print summary
     if not args.output or args.format == 'txt':
