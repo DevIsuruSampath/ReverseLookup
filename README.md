@@ -1,6 +1,6 @@
 # Reverse IP Lookup Tool
 
-Unlimited reverse IP lookup to find all domains hosted on a specific IP address.
+Unlimited reverse IP lookup to find all domains hosted on a specific IP address or from a domain name.
 
 ## Features
 
@@ -28,6 +28,9 @@ pip install -r requirements.txt
 ```bash
 # Unlimited lookup for an IP
 python main.py 8.8.8.8
+
+# Unlimited lookup for a domain (resolves to IP first)
+python main.py google.com
 
 # Limit results to 50 domains
 python main.py 8.8.8.8 --limit 50
@@ -63,7 +66,7 @@ python main.py 1.1.1.1 --output domains.txt
 
 | Argument | Short | Type | Description |
 |----------|-------|------|-------------|
-| `ip` | - | str | **Required** - IP address to lookup |
+| `target` | - | str | **Required** - IP address or domain to lookup |
 | `--limit` | `-l` | int | Limit number of results (default: unlimited) |
 | `--output` | `-o` | str | Output file path (default: stdout) |
 | `--format` | `-f` | str | Output format: txt, json, csv (default: txt) |
@@ -113,6 +116,10 @@ mail.google.com
 python main.py 8.8.8.8      # Google DNS
 python main.py 1.1.1.1      # Cloudflare DNS
 python main.py 9.9.9.9      # Quad9 DNS
+
+# Lookup by domain name
+python main.py google.com
+python main.py facebook.com --limit 50
 
 # Research - Find all domains on suspicious IP
 python main.py 192.0.2.1 --limit 200 --output suspicious.txt
