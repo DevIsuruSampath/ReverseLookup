@@ -66,9 +66,7 @@ python main.py google.com --format json --output domains.json
 
 | Tool | Description | Install Command |
 |------|-------------|-----------------|
-| **Amass** | Asset discovery | `apt install amass` |
-| **DNSrecon** | DNS reconnaissance | `apt install dnsrecon` |
-| **Sublist3r** | Subdomain enumeration | `apt install sublist3r` |
+| **Amass** | Asset discovery (passive, 45s timeout) | `apt install amass` |
 
 ## Smart Filtering
 
@@ -215,22 +213,19 @@ hr, crm, erp, billing, payment, checkout, cart, order, calendar, drive, storage,
 
 ## Performance
 
-- **DNS lookups**: Fast (0.5-2 seconds)
-- **Certificate Transparency**: Medium (8-25 seconds for 2 sources)
-- **Parallel Bruteforce**: Fast (5-15 seconds for 90+ subdomains)
-- **Amass**: Slow (30-120 seconds - very comprehensive)
-- **DNSrecon**: Medium (20-60 seconds)
-- **Sublist3r**: Medium (15-45 seconds)
-- **Total scan**: 30-180 seconds depending on target
+- **DNS lookups**: Fast (0.3-1 seconds)
+- **Certificate Transparency**: Fast (5-15 seconds, crt.sh only)
+- **Fast Brute Force**: Very fast (5-15 seconds for 60 subdomains)
+- **Amass**: Medium (30-45 seconds, passive mode)
+- **Total scan**: 20-60 seconds depending on target
 
 ## Advantages
 
-✅ **Smart filtering** - Removes WHOIS noise and abuse domains
-✅ **Kali optimized** - Uses Amass, DNSrecon, Sublist3r
+✅ **Smart filtering** - Removes WHOIS noise, abuse domains, cloud infrastructure
+✅ **Kali optimized** - Uses Amass passive mode
 ✅ **No APIs** - Uses public CT logs and direct queries
 ✅ **No rate limits** - Parallel processing
-✅ **Very comprehensive** - Multiple discovery methods
-✅ **Fast** - Parallel subdomain enumeration (30 threads)
+✅ **Fast** - Complete scan in 20-60 seconds
 ✅ **Privacy** - No data shared with third parties
 ✅ **Cross-platform** - Works everywhere Python runs
 ✅ **Optional Kali tools** - Works without them
