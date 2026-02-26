@@ -11,10 +11,8 @@ import dns.resolver
 import dns.reversename
 import subprocess
 import sys
-import asyncio
 import re
-from typing import List, Set, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Tuple
 import time
 
 
@@ -22,12 +20,22 @@ class ReverseLookup:
     """Reverse IP lookup using only DNS queries"""
 
     def __init__(self, output_file: Optional[str] = None, output_format: str = 'txt'):
-        self.domains: Set[str] = set()
+        self.domains = set()
         self.output_file = output_file
         self.output_format = output_format
+        
+        # Initialize DNS resolver with Termux compatibility
         self.resolver = dns.resolver.Resolver()
         self.resolver.timeout = 5
         self.resolver.lifetime = 10
+        
+        # Configure DNS servers for Termux compatibility
+        # Try to read resolv.conf, fallback to public DNS
+        try:
+            self.resolver.read_resolv_conf()
+        except:
+            # Fallback to public DNS servers (works on Termux)
+            self.resolver.nameservers = ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1']
 
     def add_domain(self, domain: str) -> bool:
         """Add domain if not duplicate"""
@@ -40,17 +48,14 @@ class ReverseLookup:
 
     # ==================== DNS PTR Lookup ====================
 
-    def dns_ptr_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+    def dns_ptr_lookup(self, ip: str) -> int:
         """DNS PTR record lookup"""
         count = 0
         try:
-            # Reverse the IP for PTR query
             reverse_name = dns.reversename.from_address(ip)
             answers = self.resolver.resolve(reverse_name, 'PTR')
             
             for rdata in answers:
-                if limit and count >= limit:
-                    break
                 domain = str(rdata).rstrip('.')
                 if self.add_domain(domain):
                     count += 1
@@ -63,51 +68,195 @@ class ReverseLookup:
         
         return count
 
-    # ==================== Zone Transfer (AXFR) ====================
+    # ==================== DNS MX Records ====================
 
-    def dns_axfr_lookup(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS Zone Transfer (AXFR) - if allowed"""
+    def dns_mx_lookup(self, ip: str) -> int:
+        """DNS MX record lookup for mail servers"""
         count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
         try:
-            # Get PTR first to find zone
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            
             if ptr_answers:
                 base_domain = str(ptr_answers[0]).rstrip('.')
-                # Extract the domain from PTR
-                parts = base_domain.split('.')
-                if len(parts) >= 2:
-                    zone = '.'.join(parts[-2:])
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            mx_answers = self.resolver.resolve(base_domain, 'MX')
+            
+            for rdata in mx_answers:
+                mail_server = rdata.exchange.to_text().rstrip('.')
+                if self.add_domain(mail_server):
+                    count += 1
+                    print(f"  [DNS-MX] {mail_server}")
                     
-                    # Try AXFR from each nameserver
-                    ns_answers = self.resolver.resolve(zone, 'NS')
-                    nameservers = [str(ns) for ns in ns_answers]
-                    
-                    for ns in nameservers:
-                        try:
-                            axfr = dns.query.xfr(ns, zone)
-                            for response in axfr:
-                                if response.answer:
-                                    for rr in response.answer:
-                                        if rr.rdtype == dns.rdatatype.A or rr.rdtype == dns.rdatatype.AAAA:
-                                            domain = rr.name.to_text().rstrip('.')
-                                            if limit and count >= limit:
-                                                return count
-                                            if self.add_domain(domain):
-                                                count += 1
-                                                print(f"  [AXFR] {domain}")
-                        except:
-                            continue
-                            
         except Exception as e:
-            print(f"  [AXFR] Error: {e}")
+            print(f"  [DNS-MX] Error: {e}")
+        
+        return count
+
+    # ==================== DNS NS Records ====================
+
+    def dns_ns_lookup(self, ip: str) -> int:
+        """DNS NS record lookup for name servers"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            ns_answers = self.resolver.resolve(base_domain, 'NS')
+            
+            for rdata in ns_answers:
+                nameserver = rdata.target.to_text().rstrip('.')
+                if self.add_domain(nameserver):
+                    count += 1
+                    print(f"  [DNS-NS] {nameserver}")
+                    
+        except Exception as e:
+            print(f"  [DNS-NS] Error: {e}")
+        
+        return count
+
+    # ==================== DNS TXT Records ====================
+
+    def dns_txt_lookup(self, ip: str) -> int:
+        """DNS TXT record lookup (may contain domain info)"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            txt_answers = self.resolver.resolve(base_domain, 'TXT')
+            
+            # Extract domains from TXT records
+            domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+            
+            for rdata in txt_answers:
+                txt_record = str(rdata)
+                matches = re.findall(domain_pattern, txt_record)
+                
+                for domain in matches:
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [DNS-TXT] {domain}")
+                        
+        except Exception as e:
+            print(f"  [DNS-TXT] Error: {e}")
+        
+        return count
+
+    # ==================== System host command ====================
+
+    def host_command(self, ip: str) -> int:
+        """System host command for PTR lookup"""
+        count = 0
+        try:
+            result = subprocess.run(
+                ['host', '-t', 'ptr', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                pattern = r'domain name pointer\s+([a-zA-Z0-9.-]+)\.'
+                matches = re.findall(pattern, result.stdout)
+                
+                for domain in matches:
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [Host] {domain}")
+                        
+        except Exception as e:
+            print(f"  [Host] Error: {e}")
+        
+        return count
+
+    # ==================== System nslookup command ====================
+
+    def nslookup_command(self, ip: str) -> int:
+        """System nslookup command for PTR lookup"""
+        count = 0
+        try:
+            result = subprocess.run(
+                ['nslookup', '-type=PTR', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                matches = re.findall(pattern, result.stdout)
+                
+                for domain in matches:
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [Nslookup] {domain}")
+                        
+        except Exception as e:
+            print(f"  [Nslookup] Error: {e}")
+        
+        return count
+
+    # ==================== System dig command ====================
+
+    def dig_command(self, ip: str) -> int:
+        """System dig command for PTR lookup"""
+        count = 0
+        try:
+            result = subprocess.run(
+                ['dig', '+short', '-x', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                matches = re.findall(pattern, result.stdout)
+                
+                for domain in matches:
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [Dig] {domain}")
+                        
+        except Exception as e:
+            print(f"  [Dig] Error: {e}")
         
         return count
 
     # ==================== DNS Subdomain Brute Force ====================
 
-    def dns_bruteforce(self, ip: str, limit: Optional[int] = None) -> int:
+    def dns_bruteforce(self, ip: str) -> int:
         """DNS bruteforce - try common subdomains with PTR"""
         count = 0
         
@@ -136,24 +285,13 @@ class ReverseLookup:
             'db', 'database', 'mysql', 'postgres', 'mongodb', 'redis', 'elastic',
             'cache', 'memcache', 'varnish', 'lb', 'loadbalancer', 'proxy',
             'firewall', 'gateway', 'router', 'switch', 'server', 'host',
-            'node1', 'node2', 'node3', 'master', 'slave', 'worker',
-            'jenkins', 'gitlab', 'github', 'bitbucket', 'nexus', 'artifactory',
-            'sonarqube', 'grafana', 'prometheus', 'kibana', 'elasticsearch',
-            'k8s', 'kubernetes', 'docker', 'registry', 'helm', 'argo',
-            'consul', 'vault', 'nomad', 'terraform', 'ansible', 'chef',
-            'puppet', 'salt', 'monitor', 'alert', 'log', 'metrics',
-            'backup', 'archive', 'logs', 'history', 'old', 'legacy',
-            'beta', 'alpha', 'preview', 'demo', 'sandbox', 'temp', 'tmp'
+            'node1', 'node2', 'node3', 'master', 'slave', 'worker'
         ]
         
         # Try each subdomain
         for sub in subdomains:
-            if limit and count >= limit:
-                break
-            
             test_domain = f"{sub}.{base_domain}"
             try:
-                # Try A record
                 self.resolver.resolve(test_domain, 'A')
                 if self.add_domain(test_domain):
                     count += 1
@@ -163,246 +301,9 @@ class ReverseLookup:
         
         return count
 
-    # ==================== DNS ANY Record ====================
-
-    def dns_any_lookup(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS ANY record lookup"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        try:
-            # Try ANY record
-            answers = self.resolver.resolve(base_domain, 'ANY')
-            
-            for rdata in answers:
-                domain = rdata.name.to_text().rstrip('.')
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [DNS-ANY] {domain}")
-                    
-        except Exception as e:
-            print(f"  [DNS-ANY] Error: {e}")
-        
-        return count
-
-    # ==================== DNS MX Records ====================
-
-    def dns_mx_lookup(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS MX record lookup for mail servers"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        try:
-            mx_answers = self.resolver.resolve(base_domain, 'MX')
-            
-            for rdata in mx_answers:
-                mail_server = rdata.exchange.to_text().rstrip('.')
-                if limit and count >= limit:
-                    break
-                if self.add_domain(mail_server):
-                    count += 1
-                    print(f"  [DNS-MX] {mail_server}")
-                    
-        except Exception as e:
-            print(f"  [DNS-MX] Error: {e}")
-        
-        return count
-
-    # ==================== DNS NS Records ====================
-
-    def dns_ns_lookup(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS NS record lookup for name servers"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        try:
-            ns_answers = self.resolver.resolve(base_domain, 'NS')
-            
-            for rdata in ns_answers:
-                nameserver = rdata.target.to_text().rstrip('.')
-                if limit and count >= limit:
-                    break
-                if self.add_domain(nameserver):
-                    count += 1
-                    print(f"  [DNS-NS] {nameserver}")
-                    
-        except Exception as e:
-            print(f"  [DNS-NS] Error: {e}")
-        
-        return count
-
-    # ==================== DNS TXT Records ====================
-
-    def dns_txt_lookup(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS TXT record lookup (may contain domain info)"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        try:
-            txt_answers = self.resolver.resolve(base_domain, 'TXT')
-            
-            # Extract domains from TXT records
-            domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-            
-            for rdata in txt_answers:
-                txt_record = str(rdata)
-                matches = re.findall(domain_pattern, txt_record)
-                
-                for domain in matches:
-                    if limit and count >= limit:
-                        break
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [DNS-TXT] {domain}")
-                        
-        except Exception as e:
-            print(f"  [DNS-TXT] Error: {e}")
-        
-        return count
-
-    # ==================== System host command ====================
-
-    def host_command(self, ip: str, limit: Optional[int] = None) -> int:
-        """System host command for PTR lookup"""
-        count = 0
-        try:
-            result = subprocess.run(
-                ['host', '-t', 'ptr', ip],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                # Parse output for domain names
-                pattern = r'domain name pointer\s+([a-zA-Z0-9.-]+)\.'
-                matches = re.findall(pattern, result.stdout)
-                
-                for domain in matches:
-                    if limit and count >= limit:
-                        break
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [Host] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Host] Error: {e}")
-        
-        return count
-
-    # ==================== System nslookup command ====================
-
-    def nslookup_command(self, ip: str, limit: Optional[int] = None) -> int:
-        """System nslookup command for PTR lookup"""
-        count = 0
-        try:
-            result = subprocess.run(
-                ['nslookup', '-type=PTR', ip],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                # Parse output for domain names
-                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(pattern, result.stdout)
-                
-                for domain in matches:
-                    if limit and count >= limit:
-                        break
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [Nslookup] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Nslookup] Error: {e}")
-        
-        return count
-
-    # ==================== System dig command ====================
-
-    def dig_command(self, ip: str, limit: Optional[int] = None) -> int:
-        """System dig command for PTR lookup"""
-        count = 0
-        try:
-            result = subprocess.run(
-                ['dig', '+short', '-x', ip],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0:
-                # Parse output for domain names
-                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(pattern, result.stdout)
-                
-                for domain in matches:
-                    if limit and count >= limit:
-                        break
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [Dig] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Dig] Error: {e}")
-        
-        return count
-
     # ==================== DNS SRV Records ====================
 
-    def dns_srv_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+    def dns_srv_lookup(self, ip: str) -> int:
         """DNS SRV record lookup for services"""
         count = 0
         
@@ -425,70 +326,19 @@ class ReverseLookup:
             '_ldap._tcp', '_ldaps._tcp', '_kerberos._tcp', '_kerberos._udp',
             '_kpasswd._tcp', '_kpasswd._udp', '_imap._tcp', '_imaps._tcp',
             '_pop3._tcp', '_pop3s._tcp', '_smtp._tcp', '_submission._tcp',
-            '_ftp._tcp', '_ftps._tcp', '_http._tcp', '_https._tcp',
-            '_caldav._tcp', '_carddav._tcp', '_caldavs._tcp', '_carddavs._tcp',
-            '_git._tcp', '_ssh._tcp', '_telnet._tcp', '_ws._tcp', '_wss._tcp'
+            '_ftp._tcp', '_ftps._tcp', '_http._tcp', '_https._tcp'
         ]
         
         for service in srv_services:
-            if limit and count >= limit:
-                break
-            
             srv_domain = f"{service}.{base_domain}"
             try:
                 srv_answers = self.resolver.resolve(srv_domain, 'SRV')
                 
                 for rdata in srv_answers:
                     target = rdata.target.to_text().rstrip('.')
-                    if limit and count >= limit:
-                        return count
                     if self.add_domain(target):
                         count += 1
                         print(f"  [DNS-SRV] {target}")
-                        
-            except:
-                pass
-        
-        return count
-
-    # ==================== DNS CNAME Chain ====================
-
-    def dns_cname_chain(self, ip: str, limit: Optional[int] = None) -> int:
-        """Follow CNAME chain to find related domains"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        # Common CNAME prefixes
-        cnames = ['www', 'mail', 'ftp', 'api', 'app', 'm', 'mobile']
-        
-        for cname in cnames:
-            if limit and count >= limit:
-                break
-            
-            test_domain = f"{cname}.{base_domain}"
-            try:
-                # Try CNAME lookup
-                cname_answers = self.resolver.resolve(test_domain, 'CNAME')
-                
-                for rdata in cname_answers:
-                    cname_target = rdata.target.to_text().rstrip('.')
-                    if limit and count >= limit:
-                        return count
-                    if self.add_domain(cname_target):
-                        count += 1
-                        print(f"  [DNS-CNAME] {cname_target}")
                         
             except:
                 pass
@@ -523,30 +373,32 @@ class ReverseLookup:
 
         print(f"\n✅ Saved {len(sorted_domains)} domains to {self.output_file}")
 
-    def lookup(self, ip: str, sources: List[str] = None, limit: Optional[int] = None):
-        """Perform reverse IP lookup"""
+    def lookup(self, ip: str):
+        """Perform reverse IP lookup using all DNS sources"""
         print(f"\n🔍 Reverse IP Lookup: {ip}")
         print(f"{'='*50}\n")
 
-        if sources is None:
-            sources = ['dns-ptr', 'host', 'bruteforce', 'dns-mx', 'dns-ns', 'dns-txt', 'dns-srv']
-
         start_time = time.time()
 
-        # Run all sources
+        # Run all DNS sources
+        sources = [
+            ('DNS-PTR', self.dns_ptr_lookup),
+            ('Host', self.host_command),
+            ('Nslookup', self.nslookup_command),
+            ('DNS-MX', self.dns_mx_lookup),
+            ('DNS-NS', self.dns_ns_lookup),
+            ('DNS-TXT', self.dns_txt_lookup),
+            ('DNS-SRV', self.dns_srv_lookup),
+            ('Brute-Force', self.dns_bruteforce),
+        ]
+
         total_found = 0
-        for source in sources:
-            source_method = getattr(self, f'source_{source.replace("-", "_")}', None)
-            if not source_method:
-                # Try without prefix
-                source_method = getattr(self, source.replace("-", "_"), None)
-            
-            if source_method:
-                try:
-                    found = source_method(ip, limit)
-                    total_found += found
-                except Exception as e:
-                    print(f"  [{source.upper()}] Error: {e}")
+        for name, method in sources:
+            try:
+                found = method(ip)
+                total_found += found
+            except Exception as e:
+                print(f"  [{name}] Error: {e}")
 
         elapsed = time.time() - start_time
 
@@ -554,7 +406,6 @@ class ReverseLookup:
         print(f"📊 Results:")
         print(f"   Total unique domains: {len(self.domains)}")
         print(f"   Time elapsed: {elapsed:.2f}s")
-        print(f"   Sources used: {', '.join(sources)}")
 
         # Save output
         if self.output_file:
@@ -603,27 +454,8 @@ def main():
 Examples:
   %(prog)s 8.8.8.8
   %(prog)s google.com
-  %(prog)s 8.8.8.8 --limit 50
-  %(prog)s google.com --sources dns-ptr host bruteforce --output results.json
-  %(prog)s 8.8.8.8 --format json --output domains.json
-
-DNS Sources:
-  dns-ptr      - DNS PTR record lookup
-  dns-axfr      - DNS Zone Transfer (AXFR) if allowed
-  dns-mx        - DNS MX records (mail servers)
-  dns-ns        - DNS NS records (name servers)
-  dns-txt       - DNS TXT records (may contain domains)
-  dns-any       - DNS ANY record lookup
-  dns-srv       - DNS SRV records (services)
-  dns-cname     - DNS CNAME chain lookup
-
-Brute Force Sources:
-  bruteforce    - Common subdomain enumeration (100+ subdomains)
-
-System Commands:
-  host          - System host command
-  nslookup      - System nslookup command
-  dig           - System dig command (if available)
+  %(prog)s 8.8.8.8 --output results.txt
+  %(prog)s google.com --format json --output domains.json
 
 Note: This version uses ONLY DNS queries and system tools.
 No external data sources or APIs are used.
@@ -631,17 +463,10 @@ No external data sources or APIs are used.
     )
 
     parser.add_argument('target', help='IP address or domain to lookup')
-    parser.add_argument('--limit', '-l', type=int,
-                        help='Limit number of results (default: unlimited)')
     parser.add_argument('--output', '-o', type=str,
                         help='Output file path (default: stdout)')
     parser.add_argument('--format', '-f', choices=['txt', 'json', 'csv'],
                         default='txt', help='Output format (default: txt)')
-    parser.add_argument('--sources', '-s', nargs='+',
-                        choices=['dns-ptr', 'dns-axfr', 'dns-mx', 'dns-ns', 'dns-txt',
-                                'dns-any', 'dns-srv', 'dns-cname', 'bruteforce',
-                                'host', 'nslookup', 'dig'],
-                        help='DNS sources to use (default: dns-ptr, host, bruteforce, dns-mx, dns-ns, dns-txt, dns-srv)')
 
     args = parser.parse_args()
 
@@ -671,7 +496,7 @@ No external data sources or APIs are used.
 
     # Perform lookup
     lookup = ReverseLookup(args.output, args.format)
-    domains = lookup.lookup(target_ip, args.sources, args.limit)
+    domains = lookup.lookup(target_ip)
 
     # Print summary
     if not args.output or args.format == 'txt':
