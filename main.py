@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Reverse IP Lookup Tool - Enhanced Linux/Kali Version
-Find all domains on an IP using DNS, Linux tools, and Python libraries
+Reverse IP Lookup Tool - Advanced Python Version
+Find all domains using advanced Python techniques
 """
 
 import argparse
@@ -12,19 +12,26 @@ import subprocess
 import sys
 import re
 import os
-from typing import Optional, Tuple, Set
+import ssl
+import urllib.request
+import urllib.parse
+import urllib.error
+import json
+import hashlib
+from typing import Optional, Tuple, Set, List
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class ReverseLookup:
-    """Reverse IP lookup using DNS, Linux tools, and Python libraries"""
+    """Advanced reverse IP lookup using Python techniques"""
 
     def __init__(self, output_file: Optional[str] = None, output_format: str = 'txt'):
         self.domains = set()
         self.output_file = output_file
         self.output_format = output_format
         
-        # Initialize DNS resolver with Termux compatibility
+        # Initialize DNS resolver
         try:
             self.resolver = dns.resolver.Resolver()
             self.resolver.timeout = 5
@@ -39,9 +46,10 @@ class ReverseLookup:
         """Add domain if not duplicate"""
         if domain and '.' in domain and len(domain) > 3:
             clean = domain.lower().strip()
-            # Filter out arpa domains, aws, and invalid patterns
+            # Filter out arpa, aws, and invalid patterns
             skip_patterns = ['.in-addr.arpa', '.ip6.arpa', '.compute.amazonaws.com',
-                           '.amazonaws.com', '.cloudfront.net', '.elasticbeanstalk.com']
+                           '.amazonaws.com', '.cloudfront.net', '.elasticbeanstalk.com',
+                           '.aws.amazon.com', '.ec2.internal', '.privatelink']
             if not any(pattern in clean for pattern in skip_patterns):
                 if clean not in self.domains:
                     self.domains.add(clean)
@@ -70,102 +78,110 @@ class ReverseLookup:
         
         return count
 
-    # ==================== WHOIS Tool ====================
+    # ==================== Certificate Transparency (crt.sh) ====================
 
-    def whois_lookup(self, ip: str) -> int:
-        """WHOIS lookup for domain information"""
+    def crtsh_lookup(self, ip: str) -> int:
+        """Certificate Transparency lookup via crt.sh"""
         count = 0
         
-        # Check if whois is available
-        if not self.check_command('whois'):
-            print(f"  [WHOIS] Tool not found (install: apt install whois)")
+        # Get base domain from PTR
+        base_domains = []
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                ptr = str(ptr_answers[0]).rstrip('.')
+                # Extract base domain
+                parts = ptr.split('.')
+                if len(parts) >= 2:
+                    base_domains.append('.'.join(parts[-2:]))
+                    base_domains.append('.'.join(parts[-3:]))  # Try 3 parts too
+        except:
+            pass
+        
+        if not base_domains:
             return 0
         
-        try:
-            result = subprocess.run(
-                ['whois', ip],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+        for base_domain in base_domains[:2]:  # Limit to avoid too many requests
+            url = f"https://crt.sh/?q=%.25252.{base_domain}&output=json"
             
-            if result.returncode == 0:
-                # Extract domain names from WHOIS output
-                domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(domain_pattern, result.stdout)
-                
-                for domain in matches:
+            try:
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+
+                for cert in data:
+                    domain = cert['name_value'].strip()
+                    # Handle wildcards
+                    domain = domain.lstrip('*.')
                     if self.add_domain(domain):
                         count += 1
-                        print(f"  [WHOIS] {domain}")
-                        
-        except Exception as e:
-            print(f"  [WHOIS] Error: {e}")
+                        print(f"  [crt.sh] {domain}")
+
+            except Exception as e:
+                print(f"  [crt.sh] Error: {e}")
         
         return count
 
-    # ==================== DNSrecon (Kali Tool) ====================
+    # ==================== HTTP Header Scraping ====================
 
-    def dnsrecon_lookup(self, ip: str) -> int:
-        """DNSrecon - DNS reconnaissance tool (Kali Linux)"""
+    def http_header_lookup(self, ip: str) -> int:
+        """HTTP header scraping for domains"""
         count = 0
         
-        if not self.check_command('dnsrecon'):
-            print(f"  [DNSrecon] Tool not found (install: apt install dnsrecon)")
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain or 'amazonaws.com' in base_domain:
             return 0
         
-        try:
-            output_file = f"/tmp/dnsrecon_{ip.replace('.', '_')}.json"
-            result = subprocess.run(
-                ['dnsrecon', '-t', ip, '-j', output_file],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            # Parse JSON output if it exists
-            if os.path.exists(output_file):
-                try:
-                    import json
-                    with open(output_file, 'r') as f:
-                        data = json.load(f)
+        # Common subdomains to test
+        subdomains = ['www', 'api', 'app', 'm', 'mobile', 'blog', 'shop']
+        
+        for sub in subdomains:
+            test_domain = f"{sub}.{base_domain}"
+            try:
+                url = f"http://{test_domain}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    headers = dict(response.headers)
                     
-                    # Extract domains from different sections
-                    if 'ptr' in data:
-                        for record in data['ptr']:
-                            if 'name' in record:
-                                domain = record['name'].rstrip('.')
+                    # Check various headers for domains
+                    domain_patterns = [
+                        headers.get('Server', ''),
+                        headers.get('X-Powered-By', ''),
+                        headers.get('X-Server', ''),
+                        headers.get('Via', ''),
+                        headers.get('X-Forwarded-For', ''),
+                        response.getheader('Location', ''),
+                    ]
+                    
+                    domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                    for text in domain_patterns:
+                        if text:
+                            matches = re.findall(domain_pattern, text)
+                            for domain in matches:
                                 if self.add_domain(domain):
                                     count += 1
-                                    print(f"  [DNSrecon] {domain}")
-                    
-                    if 'ns' in data:
-                        for record in data['ns']:
-                            if 'target' in record:
-                                domain = record['target'].rstrip('.')
-                                if self.add_domain(domain):
-                                    count += 1
-                                    print(f"  [DNSrecon] {domain}")
-                    
-                    # Clean up
-                    os.remove(output_file)
-                except:
-                    pass
-                        
-        except Exception as e:
-            print(f"  [DNSrecon] Error: {e}")
+                                    print(f"  [HTTP-Header] {domain}")
+
+            except Exception:
+                pass
         
         return count
 
-    # ==================== DNSenum (Kali Tool) ====================
+    # ==================== SSL/TLS Certificate Parsing ====================
 
-    def dnsenum_lookup(self, ip: str) -> int:
-        """DNSenum - DNS enumeration tool (Kali Linux)"""
+    def ssl_cert_lookup(self, ip: str, port: int = 443) -> int:
+        """SSL/TLS certificate parsing for domains"""
         count = 0
-        
-        if not self.check_command('dnsenum'):
-            print(f"  [DNSenum] Tool not found (install: apt install dnsenum)")
-            return 0
         
         # Get base domain from PTR
         base_domain = None
@@ -180,38 +196,53 @@ class ReverseLookup:
         if not base_domain or 'amazonaws.com' in base_domain:
             return 0
         
-        try:
-            result = subprocess.run(
-                ['dnsenum', base_domain],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            if result.returncode == 0:
-                # Extract domains from output
-                domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(domain_pattern, result.stdout)
+        # Common subdomains to test
+        subdomains = ['www', 'api', 'app', 'm', 'mail', 'secure']
+        
+        for sub in subdomains:
+            test_domain = f"{sub}.{base_domain}"
+            try:
+                # Try to get SSL certificate
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
                 
-                for domain in matches:
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [DNSenum] {domain}")
+                with socket.create_connection((ip, port), timeout=5) as sock:
+                    with context.wrap_socket(sock, server_hostname=test_domain) as secure_sock:
+                        cert = secure_sock.getpeercert()
                         
-        except Exception as e:
-            print(f"  [DNSenum] Error: {e}")
+                        # Extract domains from certificate
+                        if 'subject' in cert:
+                            subject = cert['subject']
+                            for item in subject:
+                                for key, value in item:
+                                    if key == 'commonName':
+                                        if self.add_domain(value):
+                                            count += 1
+                                            print(f"  [SSL-Cert] {value}")
+                        
+                        # Extract SAN (Subject Alternative Names)
+                        if 'subjectAltName' in cert:
+                            san = cert['subjectAltName']
+                            if san:
+                                for alt_name in san.split(','):
+                                    alt_name = alt_name.strip()
+                                    if alt_name.startswith('DNS:'):
+                                        domain = alt_name[4:].strip('"\'')
+                                        if self.add_domain(domain):
+                                            count += 1
+                                            print(f"  [SSL-Cert] {domain}")
+
+            except Exception:
+                pass
         
         return count
 
-    # ==================== Fierce (Kali Tool) ====================
+    # ==================== Advanced Subdomain Brute Force ====================
 
-    def fierce_lookup(self, ip: str) -> int:
-        """Fierce - DNS scanner (Kali Linux)"""
+    def advanced_bruteforce(self, ip: str) -> int:
+        """Advanced subdomain bruteforce with wordlist"""
         count = 0
-        
-        if not self.check_command('fierce'):
-            print(f"  [Fierce] Tool not found (install: apt install fierce)")
-            return 0
         
         # Get base domain from PTR
         base_domain = None
@@ -226,38 +257,71 @@ class ReverseLookup:
         if not base_domain or 'amazonaws.com' in base_domain:
             return 0
         
-        try:
-            result = subprocess.run(
-                ['fierce', '--domain', base_domain],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+        # Advanced subdomain wordlist
+        subdomains = [
+            # Common
+            'www', 'mail', 'ftp', 'admin', 'api', 'dev', 'test', 'staging', 'production',
+            'app', 'apps', 'mobile', 'm', 'w', 'wap', 'web',
+            # Infrastructure
+            'cdn', 'static', 'assets', 'img', 'images', 'video', 'media', 'upload', 'download',
+            'files', 'docs', 'wiki', 'help', 'support', 'forum', 'community', 'blog',
+            # Services
+            'shop', 'store', 'checkout', 'cart', 'order', 'payment', 'billing', 'account',
+            'login', 'signin', 'signup', 'register', 'auth', 'oauth', 'sso',
+            # Tech
+            'ns1', 'ns2', 'ns3', 'ns4', 'mx', 'smtp', 'pop', 'imap', 'exchange',
+            'db', 'database', 'cache', 'redis', 'mongo', 'elastic', 'search',
+            # DevOps
+            'jenkins', 'gitlab', 'git', 'svn', 'nexus', 'artifactory', 'sonar', 'bamboo',
+            'k8s', 'kubernetes', 'docker', 'registry', 'helm', 'argo', 'consul', 'vault',
+            # Monitoring
+            'grafana', 'prometheus', 'kibana', 'elastic', 'log', 'metrics', 'monitor',
+            # Security
+            'ssl', 'secure', 'vpn', 'firewall', 'gateway', 'proxy', 'lb', 'loadbalancer',
+            # Business
+            'hr', 'crm', 'erp', 'mail', 'email', 'webmail', 'calendar', 'drive',
+            # Location/Region
+            'us', 'eu', 'asia', 'na', 'sa', 'emea', 'apac', 'latam',
+            'us-east', 'us-west', 'eu-west', 'eu-central', 'ap-south', 'ap-east',
+            # Platform
+            'ios', 'android', 'api-v1', 'api-v2', 'api-v3', 'v1', 'v2', 'v3', 'v4',
+            'beta', 'alpha', 'preview', 'demo', 'sandbox', 'staging', 'qa', 'u',
+            # Popular
+            'portal', 'dashboard', 'panel', 'console', 'admin', 'manage', 'manage',
+            'client', 'customers', 'partners', 'suppliers', 'vendors',
+            # Social
+            'share', 'connect', 'social', 'community', 'network',
+            # Media
+            'stream', 'video', 'audio', 'music', 'radio', 'tv', 'live',
+        ]
+        
+        # Check subdomains in parallel
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(self.check_subdomain, f"{sub}.{base_domain}") for sub in subdomains}
             
-            if result.returncode == 0:
-                # Extract domains from output
-                domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(domain_pattern, result.stdout)
-                
-                for domain in matches:
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [Fierce] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Fierce] Error: {e}")
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    count += 1
         
         return count
 
-    # ==================== amass (Kali Tool) ====================
+    def check_subdomain(self, domain: str) -> Optional[str]:
+        """Check if subdomain exists"""
+        try:
+            self.resolver.resolve(domain, 'A')
+            if self.add_domain(domain):
+                print(f"  [Brute-Force] {domain}")
+                return domain
+        except:
+            pass
+        return None
 
-    def amass_lookup(self, ip: str) -> int:
-        """Amass - Asset discovery tool (Kali Linux)"""
+    # ==================== CNAME Chain Traversal ====================
+
+    def cname_chain_lookup(self, ip: str) -> int:
+        """Follow CNAME chain to find related domains"""
         count = 0
-        
-        if not self.check_command('amass'):
-            print(f"  [Amass] Tool not found (install: apt install amass)")
-            return 0
         
         # Get base domain from PTR
         base_domain = None
@@ -272,114 +336,32 @@ class ReverseLookup:
         if not base_domain or 'amazonaws.com' in base_domain:
             return 0
         
-        try:
-            result = subprocess.run(
-                ['amass', 'enum', '-passive', '-d', base_domain],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            
-            if result.returncode == 0:
-                # Extract domains
-                domains = result.stdout.split('\n')
-                for domain in domains:
-                    domain = domain.strip()
-                    if domain and self.add_domain(domain):
-                        count += 1
-                        print(f"  [Amass] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Amass] Error: {e}")
+        # Common CNAME sources
+        cnames = ['www', 'm', 'mobile', 'app', 'api', 'cdn', 'web']
         
-        return count
-
-    # ==================== dig axfr ====================
-
-    def dig_axfr(self, ip: str) -> int:
-        """DIG AXFR - Zone transfer attempt"""
-        count = 0
-        
-        # Get base domain from PTR
-        base_domain = None
-        try:
-            reverse_name = dns.reversename.from_address(ip)
-            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
-            if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
-        except:
-            pass
-        
-        if not base_domain:
-            return 0
-        
-        # Get nameservers
-        try:
-            ns_answers = self.resolver.resolve(base_domain, 'NS')
-            nameservers = [str(ns) for ns in ns_answers]
-            
-            for ns in nameservers:
-                try:
-                    result = subprocess.run(
-                        ['dig', 'axfr', base_domain, '@' + ns],
-                        capture_output=True,
-                        text=True,
-                        timeout=30
-                    )
-                    
-                    if result.returncode == 0 and 'XFR' in result.stdout:
-                        # Parse AXFR output
-                        domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                        matches = re.findall(domain_pattern, result.stdout)
-                        
-                        for domain in matches:
-                            if self.add_domain(domain):
+        for cname in cnames:
+            test_domain = f"{cname}.{base_domain}"
+            try:
+                # Follow CNAME chain (up to 3 hops)
+                current = test_domain
+                for _ in range(3):
+                    try:
+                        answers = self.resolver.resolve(current, 'CNAME')
+                        for rdata in answers:
+                            cname_target = rdata.target.to_text().rstrip('.')
+                            if self.add_domain(cname_target):
                                 count += 1
-                                print(f"  [DIG-AXFR] {domain}")
-                                
-                except:
-                    pass
-                    
-        except Exception as e:
-            print(f"  [DIG-AXFR] Error: {e}")
+                                print(f"  [CNAME-Chain] {cname_target}")
+                            current = cname_target
+                    except:
+                        break
+
+            except Exception:
+                pass
         
         return count
 
-    # ==================== Nmap ====================
-
-    def nmap_lookup(self, ip: str) -> int:
-        """Nmap - Network mapper for service discovery"""
-        count = 0
-        
-        if not self.check_command('nmap'):
-            print(f"  [Nmap] Tool not found (install: apt install nmap)")
-            return 0
-        
-        try:
-            # Quick scan for HTTP/HTTPS services
-            result = subprocess.run(
-                ['nmap', '-p', '80,443,8080,8443', '--script', 'http-title', ip],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            if result.returncode == 0:
-                # Extract domains from Nmap output
-                domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(domain_pattern, result.stdout)
-                
-                for domain in matches:
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [Nmap] {domain}")
-                        
-        except Exception as e:
-            print(f"  [Nmap] Error: {e}")
-        
-        return count
-
-    # ==================== DNSMX, NS, TXT, SRV ====================
+    # ==================== DNS Records (MX, NS, TXT, SRV) ====================
 
     def dns_record_lookup(self, ip: str, record_type: str, source_name: str) -> int:
         """Generic DNS record lookup"""
@@ -419,6 +401,99 @@ class ReverseLookup:
         
         return count
 
+    # ==================== WHOIS Lookup ====================
+
+    def whois_lookup(self, ip: str) -> int:
+        """WHOIS lookup for domain information"""
+        count = 0
+        
+        if not self.check_command('whois'):
+            print(f"  [WHOIS] Tool not found (install: apt install whois)")
+            return 0
+        
+        try:
+            result = subprocess.run(
+                ['whois', ip],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                matches = re.findall(domain_pattern, result.stdout)
+                
+                for domain in matches:
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [WHOIS] {domain}")
+                        
+        except Exception as e:
+            print(f"  [WHOIS] Error: {e}")
+        
+        return count
+
+    # ==================== DNSrecon (Kali Tool) ====================
+
+    def dnsrecon_lookup(self, ip: str) -> int:
+        """DNSrecon - DNS reconnaissance tool (Kali Linux)"""
+        count = 0
+        
+        if not self.check_command('dnsrecon'):
+            return 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain or 'amazonaws.com' in base_domain:
+            return 0
+        
+        try:
+            output_file = f"/tmp/dnsrecon_{ip.replace('.', '_')}.json"
+            result = subprocess.run(
+                ['dnsrecon', '-d', base_domain, '-j', output_file],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if os.path.exists(output_file):
+                try:
+                    with open(output_file, 'r') as f:
+                        data = json.load(f)
+                    
+                    if 'dnskey' in data:
+                        for record in data['dnskey']:
+                            if 'name' in record:
+                                domain = record['name'].rstrip('.')
+                                if self.add_domain(domain):
+                                    count += 1
+                                    print(f"  [DNSrecon] {domain}")
+                    
+                    if 'zonetransfer' in data:
+                        for record in data['zonetransfer']:
+                            if 'name' in record:
+                                domain = record['name'].rstrip('.')
+                                if self.add_domain(domain):
+                                    count += 1
+                                    print(f"  [DNSrecon] {domain}")
+                    
+                    os.remove(output_file)
+                except:
+                    pass
+                        
+        except Exception as e:
+            pass
+        
+        return count
+
     # ==================== Helper Functions ====================
 
     def check_command(self, command: str) -> bool:
@@ -446,7 +521,6 @@ class ReverseLookup:
                 f.write(f'\n\nTotal: {len(sorted_domains)} domains')
 
         elif self.output_format == 'json':
-            import json
             with open(self.output_file, 'w') as f:
                 json.dump({
                     'domains': sorted_domains,
@@ -462,8 +536,8 @@ class ReverseLookup:
         print(f"\n✅ Saved {len(sorted_domains)} domains to {self.output_file}")
 
     def lookup(self, ip: str):
-        """Perform reverse IP lookup using all available tools"""
-        print(f"\n🔍 Reverse IP Lookup: {ip}")
+        """Perform advanced reverse IP lookup"""
+        print(f"\n🔍 Advanced Reverse IP Lookup: {ip}")
         print(f"{'='*50}\n")
 
         start_time = time.time()
@@ -471,17 +545,16 @@ class ReverseLookup:
         # Run all sources
         sources = [
             ('DNS-PTR', self.dns_ptr_lookup),
-            ('WHOIS', self.whois_lookup),
+            ('crt.sh', self.crtsh_lookup),
+            ('HTTP-Header', self.http_header_lookup),
+            ('SSL-Cert', self.ssl_cert_lookup),
+            ('CNAME-Chain', self.cname_chain_lookup),
+            ('Advanced-Brute', self.advanced_bruteforce),
             ('DNS-MX', lambda x: self.dns_record_lookup(x, 'MX', 'MX')),
             ('DNS-NS', lambda x: self.dns_record_lookup(x, 'NS', 'NS')),
-            ('DNS-TXT', lambda x: self.dns_record_lookup(x, 'TXT', 'TXT')),
             ('DNS-SRV', lambda x: self.dns_record_lookup(x, 'SRV', 'SRV')),
+            ('WHOIS', self.whois_lookup),
             ('DNSrecon', self.dnsrecon_lookup),
-            ('DNSenum', self.dnsenum_lookup),
-            ('Fierce', self.fierce_lookup),
-            ('Amass', self.amass_lookup),
-            ('DIG-AXFR', self.dig_axfr),
-            ('Nmap', self.nmap_lookup),
         ]
 
         total_found = 0
@@ -540,7 +613,7 @@ def resolve_domain(domain: str) -> Tuple[bool, str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Enhanced Reverse IP Lookup - Uses DNS, Linux tools, and Python libraries',
+        description='Advanced Reverse IP Lookup - Uses Python techniques',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -549,16 +622,18 @@ Examples:
   %(prog)s 8.8.8.8 --output results.txt
   %(prog)s google.com --format json --output domains.json
 
-Kali Linux Tools Used (if available):
-  dnsrecon - DNS reconnaissance tool
-  dnsenum  - DNS enumeration tool
-  fierce    - DNS scanner
-  amass     - Asset discovery tool
-  nmap      - Network mapper
-  whois     - WHOIS client
+Advanced Python Techniques:
+  Certificate Transparency (crt.sh) - SSL certificate logs
+  HTTP Header Scraping - Extract domains from headers
+  SSL/TLS Certificate Parsing - Extract domains from certs
+  CNAME Chain Traversal - Follow CNAME redirects
+  Advanced Subdomain Bruteforce - 150+ subdomains
+  DNS Records - PTR, MX, NS, SRV
+  WHOIS Lookup - Domain information
+  DNSrecon - Kali tool (if available)
 
-Note: This tool works on standard Linux too.
-Kali tools are optional and used if available.
+Note: No external APIs or data sources required.
+Works on Linux, Kali, Termux, macOS, Windows.
         """
     )
 
@@ -575,11 +650,9 @@ Kali tools are optional and used if available.
     is_domain = False
 
     if validate_ip(args.target):
-        # It's an IP address
         target_ip = args.target
         print(f"📍 Target: {args.target} (IP address)")
     elif validate_domain(args.target):
-        # It's a domain - resolve to IP
         is_domain = True
         print(f"🔗 Resolving domain: {args.target}")
 
