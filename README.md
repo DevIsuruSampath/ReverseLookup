@@ -1,17 +1,16 @@
-# Reverse IP Lookup Tool
+# Reverse IP Lookup Tool - Pure DNS Version
 
-Enhanced unlimited reverse IP lookup to find all domains hosted on a specific IP address or from a domain name. Uses multiple data sources including DNS queries, web scraping, certificate transparency logs, and API integrations.
+**Pure DNS reverse IP lookup** to find all domains hosted on a specific IP address or from a domain name. Uses only DNS queries and system commands - no external data sources, APIs, or web scraping required.
 
 ## Features
 
-- 🚀 **Unlimited mode** - Find all possible domains (limited by sources)
-- 📊 **15+ data sources** - DNS, web scraping, CT logs, and APIs
-- 🎯 **Selective sources** - Choose which data sources to use
-- 🔑 **API support** - Censys, Shodan, ZoomEye, VirusTotal
-- 💾 **Flexible output** - TXT, JSON, or CSV formats
-- ⚡ **Fast & async** - Uses asyncio for concurrent lookups
+- 🔒 **100% DNS-based** - Only uses DNS queries and system commands
+- ⚡ **Fast & Private** - No external requests, no rate limits
+- 🎯 **12+ DNS sources** - PTR, MX, NS, TXT, SRV, CNAME, AXFR, and more
 - 🧩 **Domain support** - Auto-resolve domains to IPs
-- 🛡️ **Smart filtering** - Automatically filters common false positives
+- 🔄 **Subdomain bruteforce** - 100+ common subdomains
+- 💾 **Flexible output** - TXT, JSON, or CSV formats
+- 📦 **Zero dependencies** - Only dnspython required
 
 ## Installation
 
@@ -23,7 +22,7 @@ cd ReverseLookup
 pip install -r requirements.txt
 
 # Or install directly
-pip install aiohttp dnspython
+pip install dnspython
 ```
 
 ## Usage
@@ -40,8 +39,8 @@ python main.py google.com
 # Limit results to 50 domains
 python main.py 8.8.8.8 --limit 50
 
-# Use specific sources only
-python main.py 8.8.8.8 --sources viewdns bing crtsh
+# Use specific DNS sources only
+python main.py 8.8.8.8 --sources dns-ptr host bruteforce
 ```
 
 ### Output Options
@@ -57,35 +56,17 @@ python main.py 8.8.8.8 --format json --output results.json
 python main.py 8.8.8.8 --format csv --output results.csv
 ```
 
-### API Key Configuration
-
-API keys can be passed via command line or environment variables:
-
-```bash
-# Command line
-python main.py 8.8.8.8 --shodan-api-key YOUR_KEY --censys-api-id ID --censys-api-secret SECRET
-
-# Environment variables
-export SHODAN_API_KEY="your_key"
-export CENSYS_API_ID="your_id"
-export CENSYS_API_SECRET="your_secret"
-export ZOOMEYE_API_KEY="your_key"
-export VIRUSTOTAL_API_KEY="your_key"
-
-python main.py 8.8.8.8 --sources shodan censys
-```
-
 ### Combined Options
 
 ```bash
-# Find up to 100 domains using ViewDNS, Bing, and CRT.sh, save as JSON
-python main.py 8.8.8.8 --limit 100 --sources viewdns bing crtsh --format json --output results.json
+# Find up to 100 domains using DNS PTR, host command, and bruteforce, save as JSON
+python main.py 8.8.8.8 --limit 100 --sources dns-ptr host bruteforce --format json --output results.json
 
-# Unlimited search with all non-API sources
+# Unlimited search with all DNS sources
 python main.py 1.1.1.1 --output domains.txt
 
-# Domain lookup with API sources
-python main.py google.com --sources dns-ptr crtsh shodan zoomeye --shodan-api-key KEY --zoomeye-api-key KEY
+# Domain lookup with comprehensive DNS sources
+python main.py google.com --sources dns-ptr dns-mx dns-ns dns-txt bruteforce
 ```
 
 ## Named Arguments
@@ -96,72 +77,36 @@ python main.py google.com --sources dns-ptr crtsh shodan zoomeye --shodan-api-ke
 | `--limit` | `-l` | int | Limit number of results (default: unlimited) |
 | `--output` | `-o` | str | Output file path (default: stdout) |
 | `--format` | `-f` | str | Output format: txt, json, csv (default: txt) |
-| `--sources` | `-s` | list | Data sources to use (default: all non-API sources) |
+| `--sources` | `-s` | list | DNS sources to use (default: dns-ptr, host, bruteforce, dns-mx, dns-ns, dns-txt, dns-srv) |
 
-## Data Sources
+## DNS Sources
 
-### DNS Sources (Fast, No Rate Limits)
-
-| Source | Description | Speed | Notes |
-|--------|-------------|-------|-------|
-| **dns-ptr** | DNS PTR record lookup | ⚡⚡⚡ | Primary reverse DNS |
-| **dns-bruteforce** | Common subdomain enumeration | ⚡⚡ | Tests common subdomains |
-| **host** | System host command | ⚡⚡ | Native DNS lookup |
-
-### Web Scraping Sources (Free, Rate Limited)
-
-| Source | Description | Speed | Coverage |
-|--------|-------------|-------|----------|
-| **viewdns** | ViewDNS.info API | ⚡ | Good initial results |
-| **bing** | Bing search results | ⚡ | May find hidden domains |
-| **duckduckgo** | DuckDuckGo search | ⚡ | Privacy-focused search |
-| **netcraft** | Netcraft site report | ⚡ | Historical data |
-| **yougetsignal** | YouGetSignal lookup | ⚡ | Clean results |
-| **iphostinfo** | IPHostInfo domains | ⚡ | Web hosting data |
-| **domainbigdata** | DomainBigData lookup | ⚡ | Comprehensive |
-| **myip** | MyIP.ms reverse IP | ⚡ | Detailed reports |
-
-### Certificate Transparency Sources
+### Primary DNS Sources
 
 | Source | Description | Speed | Notes |
 |--------|-------------|-------|-------|
-| **crtsh** | Certificate Transparency logs | ⚡⚡ | Finds all SSL certificates |
+| **dns-ptr** | DNS PTR record lookup | ⚡⚡⚡ | Primary reverse DNS record |
+| **host** | System host command | ⚡⚡⚡ | Native DNS lookup |
+| **dig** | System dig command | ⚡⚡⚡ | Advanced DNS tool |
+| **nslookup** | System nslookup command | ⚡⚡ | Standard DNS lookup |
 
-### API Sources (Requires API Key)
+### Record Type Sources
 
-| Source | Description | Speed | Coverage | API Key |
-|--------|-------------|-------|----------|---------|
-| **censys** | Censys API | ⚡⚡⚡ | Very High | `--censys-api-id` + `--censys-api-secret` |
-| **shodan** | Shodan API | ⚡⚡⚡ | Very High | `--shodan-api-key` |
-| **zoomeye** | ZoomEye API | ⚡⚡ | High | `--zoomeye-api-key` |
-| **virustotal** | VirusTotal API | ⚡ | Medium | `--virustotal-api-key` |
+| Source | Description | Speed | What it finds |
+|--------|-------------|-------|---------------|
+| **dns-mx** | DNS MX records | ⚡⚡ | Mail server domains |
+| **dns-ns** | DNS NS records | ⚡⚡ | Name server domains |
+| **dns-txt** | DNS TXT records | ⚡⚡ | Domains in TXT records |
+| **dns-any** | DNS ANY record | ⚡⚡ | All available records |
+| **dns-srv** | DNS SRV records | ⚡ | Service-related domains |
+| **dns-cname** | DNS CNAME chain | ⚡ | Alias/redirect domains |
 
-## API Key Setup
+### Advanced Sources
 
-### Censys
-```bash
-# Get API ID and Secret from: https://search.censys.io/account
-export CENSYS_API_ID="your_api_id"
-export CENSYS_API_SECRET="your_api_secret"
-```
-
-### Shodan
-```bash
-# Get API Key from: https://developer.shodan.io/api
-export SHODAN_API_KEY="your_api_key"
-```
-
-### ZoomEye
-```bash
-# Get API Key from: https://www.zoomeye.hk/user
-export ZOOMEYE_API_KEY="your_api_key"
-```
-
-### VirusTotal
-```bash
-# Get API Key from: https://www.virustotal.com/myapikey
-export VIRUSTOTAL_API_KEY="your_api_key"
-```
+| Source | Description | Speed | Notes |
+|--------|-------------|-------|-------|
+| **dns-axfr** | DNS Zone Transfer | ⚡ | If AXFR is allowed (rare) |
+| **bruteforce** | Subdomain enumeration | ⚡⚡ | Tests 100+ common subdomains |
 
 ## Output Formats
 
@@ -209,75 +154,119 @@ python main.py amazon.com
 ### Research & Security
 
 ```bash
-# Find all domains on suspicious IP
-python main.py 192.0.2.1 --limit 200 --output suspicious.txt
+# Find all domains on an IP using all DNS sources
+python main.py 192.0.2.1 --output all-dns.txt
 
-# Use API sources for comprehensive results
-python main.py 203.0.113.1 --sources censys shodan zoomeye --output scan.json
+# Bruteforce subdomains
+python main.py example.com --sources dns-ptr bruteforce --limit 100
 
-# Certificate transparency search
-python main.py example.com --sources crtsh dns-ptr --output certificates.txt
-```
-
-### SEO Analysis
-
-```bash
-# Check competitor hosting
-python main.py 203.0.113.1 --sources viewdns bing netcraft --format json --output competitor.json
-
-# Find all subdomains
-python main.py example.com --sources dns-ptr dns-bruteforce crtsh
+# Check mail and name servers
+python main.py example.com --sources dns-mx dns-ns
 ```
 
 ### Comprehensive Search
 
 ```bash
-# Use all free sources (default)
-python main.py 1.1.1.1 --output all-domains.txt
-
-# Use all sources including APIs
-python main.py 1.1.1.1 --sources dns-ptr dns-bruteforce viewdns bing duckduckgo netcraft yougetsignal iphostinfo domainbigdata myip crtsh censys shodan zoomeye virustotal
+# Use all available DNS sources
+python main.py 1.1.1.1 --sources dns-ptr dns-mx dns-ns dns-txt dns-srv dns-cname bruteforce host dig nslookup
 ```
 
 ## How It Works
 
 1. **Input**: IP address or domain name
 2. **Domain Resolution**: If domain is provided, resolves to IP using DNS
-3. **Source Selection**: Runs selected sources concurrently
-4. **Result Collection**: Aggregates domains from all sources
-5. **Filtering**: Removes duplicates and common false positives (CDNs, cloud providers)
+3. **DNS Queries**: Runs selected DNS query types
+4. **Subdomain Brute Force**: Tests common subdomains against the PTR domain
+5. **Result Collection**: Aggregates domains from all DNS queries
 6. **Output**: Formats and saves results
 
-## Smart Filtering
+## DNS Query Types Explained
 
-Automatically filters out common false positives:
-- Cloudflare domains (`.cloudflare.com`, `.cloudflare.net`)
-- Akamai domains (`.akamai.net`, `.akamaized.net`)
-- Fastly domains (`.fastly.net`)
-- AWS domains (`.amazonaws.com`)
-- Google domains (`.googleusercontent.com`)
+### PTR Record
+- The primary reverse DNS record
+- Maps IP address to domain name
+- Example: `8.8.8.8` → `dns.google`
+
+### MX Record
+- Mail Exchange records
+- Find mail server domains
+- Example: `mx.google.com`, `smtp.gmail.com`
+
+### NS Record
+- Name Server records
+- Find nameserver domains
+- Example: `ns1.google.com`, `ns2.google.com`
+
+### TXT Record
+- Text records (often contain verification info)
+- May contain domain references
+- Example: SPF records, DKIM records
+
+### SRV Record
+- Service records
+- Find service-specific domains
+- Example: `_xmpp-server._tcp.google.com`
+
+### CNAME Record
+- Canonical Name (alias) records
+- Find aliased/redirect domains
+- Example: `www.google.com` → `google.com`
+
+### AXFR (Zone Transfer)
+- Full zone dump (if allowed)
+- Can find all domains in a zone
+- Usually disabled for security
+
+## Subdomain Bruteforce
+
+The bruteforce source tests 100+ common subdomains:
+
+**Infrastructure**: www, mail, ftp, admin, api, dev, test, staging, production
+
+**Services**: blog, shop, store, forum, wiki, help, support, docs
+
+**Tech Stack**: cdn, static, assets, img, images, video, media, upload, db, cache
+
+**Mail**: pop, imap, smtp, exchange, webmail, mail, email
+
+**Systems**: ns1, ns2, ns3, mx, lb, proxy, firewall, gateway
+
+**DevOps**: jenkins, gitlab, nexus, docker, k8s, kubernetes, consul, vault
+
+**Monitoring**: grafana, prometheus, kibana, elasticsearch, log, metrics
+
+**And many more...**
 
 ## Requirements
 
 - Python 3.7+
-- aiohttp
 - dnspython
+
+## Advantages of Pure DNS Approach
+
+✅ **No external dependencies** - Only DNS queries
+✅ **No rate limiting** - No API limits
+✅ **Fast** - Direct DNS queries are quick
+✅ **Private** - No data shared with third parties
+✅ **Reliable** - Uses standard DNS protocols
+✅ **No authentication** - No API keys needed
+✅ **Offline capable** - Works with local DNS
+
+## Limitations
+
+⚠️ **Only finds PTR-mapped domains** - Can't find domains without PTR records
+⚠️ **Depends on DNS configuration** - Results vary by server
+⚠️ **Bruteforce limited** - Only tests common subdomains
+⚠️ **AXFR rare** - Zone transfers are usually disabled
 
 ## Tips
 
-- **Start fast**: Use DNS sources (`dns-ptr`, `host`) for quick results
-- **Deep search**: Add web scraping sources (`viewdns`, `bing`, `crtsh`)
-- **Comprehensive**: Use API sources (`censys`, `shodan`) with API keys
-- **Rate limiting**: Web scraping sources have built-in delays
+- **Start fast**: Use `dns-ptr` and `host` for quick results
+- **Deep search**: Add `bruteforce` for subdomains
+- **Mail servers**: Use `dns-mx` to find email domains
+- **Name servers**: Use `dns-ns` to find DNS server domains
+- **Services**: Use `dns-srv` for service-related domains
 - **Combine sources**: Use multiple sources for best coverage
-
-## Notes
-
-- **Rate limiting**: Web sources include delays to avoid blocking
-- **Accuracy**: Results vary by source and IP; combine multiple sources
-- **Privacy**: Uses public data sources only
-- **Legal**: Use responsibly and only on IPs/domains you have permission to investigate
-- **False positives**: Smart filtering removes common false positives
 
 ## Troubleshooting
 
@@ -288,18 +277,29 @@ python main.py google.com
 # If fails, check your DNS server
 ```
 
-### API Key Issues
-```bash
-# Verify API keys are set
-echo $SHODAN_API_KEY
-echo $CENSYS_API_ID
+### No PTR Record Found
+```
+# This is normal for many IPs
+# Not all IPs have reverse DNS configured
 ```
 
-### Rate Limiting
-```bash
-# Use fewer sources to avoid rate limits
-python main.py 8.8.8.8 --sources dns-ptr viewdns
+### Bruteforce Returns No Results
 ```
+# The domain might not use common subdomain patterns
+# Try different sources like dns-mx, dns-ns
+```
+
+## Comparison with Web Scraping Version
+
+| Feature | Pure DNS Version | Web Scraping Version |
+|---------|------------------|---------------------|
+| External requests | No | Yes |
+| Rate limits | No | Yes |
+| API keys | No | Optional |
+| Speed | Fast | Slower |
+| Privacy | High | Medium |
+| Coverage | Medium | High |
+| Dependencies | dnspython | aiohttp, dnspython |
 
 ## License
 
@@ -307,8 +307,8 @@ MIT
 
 ## Contributing
 
-Pull requests welcome! Add more data sources or improve existing ones.
+Pull requests welcome! Add more DNS query types or improve existing ones.
 
 ## Credits
 
-Built with Python, aiohttp, dnspython, and various public APIs.
+Built with Python and dnspython. Pure DNS-based approach with no external dependencies.

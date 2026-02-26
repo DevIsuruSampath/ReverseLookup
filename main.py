@@ -1,74 +1,53 @@
 #!/usr/bin/env python3
 """
-Reverse IP Lookup Tool
-Find all domains hosted on a specific IP address
-Enhanced with multiple sources and Python libraries
+Reverse IP Lookup Tool - Pure DNS Version
+Find all domains on an IP using only DNS queries and Python libraries
+No external data sources or APIs required
 """
 
 import argparse
-import asyncio
-import aiohttp
-import json
-import re
 import socket
-import sys
 import dns.resolver
+import dns.reversename
 import subprocess
-from typing import List, Set, Optional, Tuple, Dict
-from urllib.parse import quote, urlencode
+import sys
+import asyncio
+import re
+from typing import List, Set, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import time
-import os
 
 
 class ReverseLookup:
-    """Reverse IP lookup using multiple sources"""
+    """Reverse IP lookup using only DNS queries"""
 
-    def __init__(self, output_file: Optional[str] = None, output_format: str = 'txt',
-                 api_keys: Optional[Dict[str, str]] = None):
+    def __init__(self, output_file: Optional[str] = None, output_format: str = 'txt'):
         self.domains: Set[str] = set()
         self.output_file = output_file
         self.output_format = output_format
-        self.api_keys = api_keys or {}
-        self.session: Optional[aiohttp.ClientSession] = None
-
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30),
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        )
-        return self
-
-    async def __aexit__(self, *args):
-        if self.session:
-            await self.session.close()
+        self.resolver = dns.resolver.Resolver()
+        self.resolver.timeout = 5
+        self.resolver.lifetime = 10
 
     def add_domain(self, domain: str) -> bool:
         """Add domain if not duplicate"""
         if domain and '.' in domain and len(domain) > 3:
             clean = domain.lower().strip()
-            # Filter out common false positives
-            skip_patterns = ['.cloudflare.com', '.cloudflare.net', '.akamai.net', '.akamaized.net',
-                           '.fastly.net', '.cloudfront.net', '.amazonaws.com', '.googleusercontent.com']
-            if not any(pattern in clean for pattern in skip_patterns):
-                if clean not in self.domains:
-                    self.domains.add(clean)
-                    return True
+            if clean not in self.domains:
+                self.domains.add(clean)
+                return True
         return False
 
-    # ==================== DNS-Based Sources ====================
+    # ==================== DNS PTR Lookup ====================
 
-    async def source_dns_ptr(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS PTR record lookup using dnspython"""
+    def dns_ptr_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS PTR record lookup"""
         count = 0
         try:
-            resolver = dns.resolver.Resolver()
-            resolver.timeout = 5
-            resolver.lifetime = 10
+            # Reverse the IP for PTR query
+            reverse_name = dns.reversename.from_address(ip)
+            answers = self.resolver.resolve(reverse_name, 'PTR')
             
-            # Get PTR record
-            answers = resolver.resolve(ip, 'PTR')
             for rdata in answers:
                 if limit and count >= limit:
                     break
@@ -77,499 +56,443 @@ class ReverseLookup:
                     count += 1
                     print(f"  [DNS-PTR] {domain}")
                     
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            print(f"  [DNS-PTR] No PTR record found")
         except Exception as e:
             print(f"  [DNS-PTR] Error: {e}")
+        
         return count
 
-    async def source_dns_bruteforce(self, ip: str, limit: Optional[int] = None) -> int:
-        """DNS bruteforce using common subdomains"""
+    # ==================== Zone Transfer (AXFR) ====================
+
+    def dns_axfr_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS Zone Transfer (AXFR) - if allowed"""
         count = 0
-        subdomains = ['www', 'mail', 'ftp', 'admin', 'api', 'staging', 'dev', 'test',
-                      'blog', 'shop', 'secure', 'vpn', 'cdn', 'static', 'assets', 'img']
-        
         try:
-            resolver = dns.resolver.Resolver()
-            resolver.timeout = 3
-            resolver.lifetime = 5
+            # Get PTR first to find zone
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             
-            # Get the base domain from PTR if available
-            base_domain = None
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+                # Extract the domain from PTR
+                parts = base_domain.split('.')
+                if len(parts) >= 2:
+                    zone = '.'.join(parts[-2:])
+                    
+                    # Try AXFR from each nameserver
+                    ns_answers = self.resolver.resolve(zone, 'NS')
+                    nameservers = [str(ns) for ns in ns_answers]
+                    
+                    for ns in nameservers:
+                        try:
+                            axfr = dns.query.xfr(ns, zone)
+                            for response in axfr:
+                                if response.answer:
+                                    for rr in response.answer:
+                                        if rr.rdtype == dns.rdatatype.A or rr.rdtype == dns.rdatatype.AAAA:
+                                            domain = rr.name.to_text().rstrip('.')
+                                            if limit and count >= limit:
+                                                return count
+                                            if self.add_domain(domain):
+                                                count += 1
+                                                print(f"  [AXFR] {domain}")
+                        except:
+                            continue
+                            
+        except Exception as e:
+            print(f"  [AXFR] Error: {e}")
+        
+        return count
+
+    # ==================== DNS Subdomain Brute Force ====================
+
+    def dns_bruteforce(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS bruteforce - try common subdomains with PTR"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        # Common subdomains list
+        subdomains = [
+            'www', 'mail', 'ftp', 'admin', 'api', 'staging', 'dev', 'test',
+            'blog', 'shop', 'store', 'secure', 'vpn', 'cdn', 'static', 'assets',
+            'img', 'images', 'video', 'media', 'upload', 'download', 'files',
+            'docs', 'wiki', 'help', 'support', 'forum', 'community', 'news',
+            'events', 'calendar', 'crm', 'erp', 'portal', 'dashboard', 'panel',
+            'app', 'apps', 'mobile', 'm', 'wap', 'web', 'ns1', 'ns2', 'ns3',
+            'pop', 'imap', 'smtp', 'mx', 'exchange', 'email', 'webmail',
+            'db', 'database', 'mysql', 'postgres', 'mongodb', 'redis', 'elastic',
+            'cache', 'memcache', 'varnish', 'lb', 'loadbalancer', 'proxy',
+            'firewall', 'gateway', 'router', 'switch', 'server', 'host',
+            'node1', 'node2', 'node3', 'master', 'slave', 'worker',
+            'jenkins', 'gitlab', 'github', 'bitbucket', 'nexus', 'artifactory',
+            'sonarqube', 'grafana', 'prometheus', 'kibana', 'elasticsearch',
+            'k8s', 'kubernetes', 'docker', 'registry', 'helm', 'argo',
+            'consul', 'vault', 'nomad', 'terraform', 'ansible', 'chef',
+            'puppet', 'salt', 'monitor', 'alert', 'log', 'metrics',
+            'backup', 'archive', 'logs', 'history', 'old', 'legacy',
+            'beta', 'alpha', 'preview', 'demo', 'sandbox', 'temp', 'tmp'
+        ]
+        
+        # Try each subdomain
+        for sub in subdomains:
+            if limit and count >= limit:
+                break
+            
+            test_domain = f"{sub}.{base_domain}"
             try:
-                ptr_answers = resolver.resolve(ip, 'PTR')
-                if ptr_answers:
-                    base_domain = str(ptr_answers[0]).rstrip('.')
+                # Try A record
+                self.resolver.resolve(test_domain, 'A')
+                if self.add_domain(test_domain):
+                    count += 1
+                    print(f"  [Brute-Force] {test_domain}")
             except:
                 pass
-            
-            # Try common subdomains with different domains found from PTR
-            if base_domain:
-                for sub in subdomains:
-                    if limit and count >= limit:
-                        break
-                    test_domain = f"{sub}.{base_domain}"
-                    try:
-                        resolver.resolve(test_domain, 'A')
-                        if self.add_domain(test_domain):
-                            count += 1
-                            print(f"  [DNS-Brute] {test_domain}")
-                    except:
-                        pass
-                        
-        except Exception as e:
-            print(f"  [DNS-Brute] Error: {e}")
+        
         return count
 
-    async def source_host(self, ip: str, limit: Optional[int] = None) -> int:
-        """System host command for DNS lookup"""
+    # ==================== DNS ANY Record ====================
+
+    def dns_any_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS ANY record lookup"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            # Try ANY record
+            answers = self.resolver.resolve(base_domain, 'ANY')
+            
+            for rdata in answers:
+                domain = rdata.name.to_text().rstrip('.')
+                if limit and count >= limit:
+                    break
+                if self.add_domain(domain):
+                    count += 1
+                    print(f"  [DNS-ANY] {domain}")
+                    
+        except Exception as e:
+            print(f"  [DNS-ANY] Error: {e}")
+        
+        return count
+
+    # ==================== DNS MX Records ====================
+
+    def dns_mx_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS MX record lookup for mail servers"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            mx_answers = self.resolver.resolve(base_domain, 'MX')
+            
+            for rdata in mx_answers:
+                mail_server = rdata.exchange.to_text().rstrip('.')
+                if limit and count >= limit:
+                    break
+                if self.add_domain(mail_server):
+                    count += 1
+                    print(f"  [DNS-MX] {mail_server}")
+                    
+        except Exception as e:
+            print(f"  [DNS-MX] Error: {e}")
+        
+        return count
+
+    # ==================== DNS NS Records ====================
+
+    def dns_ns_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS NS record lookup for name servers"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            ns_answers = self.resolver.resolve(base_domain, 'NS')
+            
+            for rdata in ns_answers:
+                nameserver = rdata.target.to_text().rstrip('.')
+                if limit and count >= limit:
+                    break
+                if self.add_domain(nameserver):
+                    count += 1
+                    print(f"  [DNS-NS] {nameserver}")
+                    
+        except Exception as e:
+            print(f"  [DNS-NS] Error: {e}")
+        
+        return count
+
+    # ==================== DNS TXT Records ====================
+
+    def dns_txt_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS TXT record lookup (may contain domain info)"""
+        count = 0
+        
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
+            return 0
+        
+        try:
+            txt_answers = self.resolver.resolve(base_domain, 'TXT')
+            
+            # Extract domains from TXT records
+            domain_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+            
+            for rdata in txt_answers:
+                txt_record = str(rdata)
+                matches = re.findall(domain_pattern, txt_record)
+                
+                for domain in matches:
+                    if limit and count >= limit:
+                        break
+                    if self.add_domain(domain):
+                        count += 1
+                        print(f"  [DNS-TXT] {domain}")
+                        
+        except Exception as e:
+            print(f"  [DNS-TXT] Error: {e}")
+        
+        return count
+
+    # ==================== System host command ====================
+
+    def host_command(self, ip: str, limit: Optional[int] = None) -> int:
+        """System host command for PTR lookup"""
         count = 0
         try:
-            result = subprocess.run(['host', '-t', 'ptr', ip], 
-                                  capture_output=True, text=True, timeout=10)
+            result = subprocess.run(
+                ['host', '-t', 'ptr', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
             if result.returncode == 0:
                 # Parse output for domain names
                 pattern = r'domain name pointer\s+([a-zA-Z0-9.-]+)\.'
                 matches = re.findall(pattern, result.stdout)
+                
                 for domain in matches:
                     if limit and count >= limit:
                         break
                     if self.add_domain(domain):
                         count += 1
                         print(f"  [Host] {domain}")
+                        
         except Exception as e:
             print(f"  [Host] Error: {e}")
+        
         return count
 
-    # ==================== Web Scraping Sources ====================
+    # ==================== System nslookup command ====================
 
-    async def source_viewdns(self, ip: str, limit: Optional[int] = None) -> int:
-        """ViewDNS.info API (free with rate limiting)"""
-        url = f"https://viewdns.info/reverseip/?host={ip}&t=1"
+    def nslookup_command(self, ip: str, limit: Optional[int] = None) -> int:
+        """System nslookup command for PTR lookup"""
         count = 0
-
         try:
-            await asyncio.sleep(1)  # Rate limiting
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
-
-            # Parse HTML response - more robust pattern
-            pattern = r'<td>([a-zA-Z0-9][-a-zA-Z0-9]{0,61}\.[a-zA-Z]{2,})</td>'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [ViewDNS] {domain}")
-
-        except Exception as e:
-            print(f"  [ViewDNS] Error: {e}")
-
-        return count
-
-    async def source_bing(self, ip: str, limit: Optional[int] = None) -> int:
-        """Bing search for IP references"""
-        count = 0
-        max_pages = 5 if not limit else min(5, (limit // 10) + 1)
-
-        for page in range(max_pages):
-            if limit and count >= limit:
-                break
-
-            offset = page * 10
-            query = f"ip:{ip}"
-            url = f"https://www.bing.com/search?q={quote(query)}&first={offset}"
-
-            try:
-                await asyncio.sleep(2)  # Rate limiting
-                async with self.session.get(url) as resp:
-                    if resp.status != 200:
-                        continue
-                    text = await resp.text()
-
-                # Extract domains from search results - improved pattern
-                pattern = r'https?://([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-                matches = re.findall(pattern, text)
-
+            result = subprocess.run(
+                ['nslookup', '-type=PTR', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                # Parse output for domain names
+                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                matches = re.findall(pattern, result.stdout)
+                
                 for domain in matches:
                     if limit and count >= limit:
                         break
                     if self.add_domain(domain):
                         count += 1
-                        print(f"  [Bing] {domain}")
-
-            except Exception as e:
-                print(f"  [Bing] Page {page} Error: {e}")
-
-        return count
-
-    async def source_duckduckgo(self, ip: str, limit: Optional[int] = None) -> int:
-        """DuckDuckGo search for IP references"""
-        count = 0
-        query = f"ip:{ip}"
-        url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
-
-        try:
-            await asyncio.sleep(1)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
-
-            # Extract domains from search results
-            pattern = r'https?://([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [DuckDuckGo] {domain}")
-
+                        print(f"  [Nslookup] {domain}")
+                        
         except Exception as e:
-            print(f"  [DuckDuckGo] Error: {e}")
-
-        return count
-
-    async def source_netcraft(self, ip: str, limit: Optional[int] = None) -> int:
-        """Netcraft site report"""
-        count = 0
-        url = f"https://searchdns.netcraft.com/?restriction=site+contains&host={quote(ip)}"
-
-        try:
-            await asyncio.sleep(2)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
-
-            # Parse domains - improved pattern
-            pattern = r'<a[^>]*href="https?://([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})"'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [Netcraft] {domain}")
-
-        except Exception as e:
-            print(f"  [Netcraft] Error: {e}")
-
-        return count
-
-    async def source_yougetsignal(self, ip: str, limit: Optional[int] = None) -> int:
-        """YouGetSignal reverse IP lookup"""
-        count = 0
-        url = "https://www.yougetsignal.com/tools/web-sites-on-web-server/"
+            print(f"  [Nslookup] Error: {e}")
         
-        try:
-            await asyncio.sleep(2)
-            data = {'remoteAddress': ip}
-            async with self.session.post(url, data=data) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
+        return count
 
-            # Parse JSON response or text
-            try:
-                result = json.loads(text)
-                if 'domainArray' in result:
-                    for domain_info in result['domainArray']:
-                        domain = domain_info[0]
-                        if limit and count >= limit:
-                            break
-                        if self.add_domain(domain):
-                            count += 1
-                            print(f"  [YouGetSignal] {domain}")
-            except:
-                # Fallback to text parsing
-                pattern = r'[a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,}'
-                matches = re.findall(pattern, text)
+    # ==================== System dig command ====================
+
+    def dig_command(self, ip: str, limit: Optional[int] = None) -> int:
+        """System dig command for PTR lookup"""
+        count = 0
+        try:
+            result = subprocess.run(
+                ['dig', '+short', '-x', ip],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                # Parse output for domain names
+                pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
+                matches = re.findall(pattern, result.stdout)
+                
                 for domain in matches:
                     if limit and count >= limit:
                         break
                     if self.add_domain(domain):
                         count += 1
-                        print(f"  [YouGetSignal] {domain}")
-
+                        print(f"  [Dig] {domain}")
+                        
         except Exception as e:
-            print(f"  [YouGetSignal] Error: {e}")
-
+            print(f"  [Dig] Error: {e}")
+        
         return count
 
-    async def source_iphostinfo(self, ip: str, limit: Optional[int] = None) -> int:
-        """IPHostInfo reverse IP lookup"""
-        count = 0
-        url = f"https://iphostinfo.com/html/Reverse_IP_Lookup_{ip.replace('.', '_')}.html"
-        
-        try:
-            await asyncio.sleep(2)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
+    # ==================== DNS SRV Records ====================
 
-            pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [IPHostInfo] {domain}")
-
-        except Exception as e:
-            print(f"  [IPHostInfo] Error: {e}")
-
-        return count
-
-    async def source_domainbigdata(self, ip: str, limit: Optional[int] = None) -> int:
-        """DomainBigData reverse IP lookup"""
-        count = 0
-        url = f"https://domainbigdata.com/sd/{ip}"
-        
-        try:
-            await asyncio.sleep(2)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
-
-            pattern = r'[a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,}'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [DomainBigData] {domain}")
-
-        except Exception as e:
-            print(f"  [DomainBigData] Error: {e}")
-
-        return count
-
-    async def source_myip(self, ip: str, limit: Optional[int] = None) -> int:
-        """MyIP.ms reverse IP lookup"""
-        count = 0
-        url = f"https://myip.ms/browse/domains/{ip}"
-        
-        try:
-            await asyncio.sleep(3)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                text = await resp.text()
-
-            pattern = r'([a-zA-Z0-9][-a-zA-Z0-9.]{1,61}\.[a-zA-Z]{2,})'
-            matches = re.findall(pattern, text)
-
-            for domain in matches:
-                if limit and count >= limit:
-                    break
-                if self.add_domain(domain):
-                    count += 1
-                    print(f"  [MyIP.ms] {domain}")
-
-        except Exception as e:
-            print(f"  [MyIP.ms] Error: {e}")
-
-        return count
-
-    # ==================== Certificate Transparency Sources ====================
-
-    async def source_crtsh(self, ip: str, limit: Optional[int] = None) -> int:
-        """crt.sh certificate transparency search"""
+    def dns_srv_lookup(self, ip: str, limit: Optional[int] = None) -> int:
+        """DNS SRV record lookup for services"""
         count = 0
         
-        # First, try to get domain from PTR
-        base_domains = []
+        # Get base domain from PTR
+        base_domain = None
         try:
-            resolver = dns.resolver.Resolver()
-            resolver.timeout = 3
-            ptr_answers = resolver.resolve(ip, 'PTR')
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                ptr = str(ptr_answers[0]).rstrip('.')
-                # Extract the base domain
-                parts = ptr.split('.')
-                if len(parts) >= 2:
-                    base_domains.append('.'.join(parts[-2:]))
+                base_domain = str(ptr_answers[0]).rstrip('.')
         except:
             pass
         
-        # Search for each base domain
-        for base_domain in base_domains[:3]:  # Limit to 3 PTR results
+        if not base_domain:
+            return 0
+        
+        # Common SRV services
+        srv_services = [
+            '_sip._tcp', '_sips._tcp', '_xmpp-server._tcp', '_xmpp-client._tcp',
+            '_ldap._tcp', '_ldaps._tcp', '_kerberos._tcp', '_kerberos._udp',
+            '_kpasswd._tcp', '_kpasswd._udp', '_imap._tcp', '_imaps._tcp',
+            '_pop3._tcp', '_pop3s._tcp', '_smtp._tcp', '_submission._tcp',
+            '_ftp._tcp', '_ftps._tcp', '_http._tcp', '_https._tcp',
+            '_caldav._tcp', '_carddav._tcp', '_caldavs._tcp', '_carddavs._tcp',
+            '_git._tcp', '_ssh._tcp', '_telnet._tcp', '_ws._tcp', '_wss._tcp'
+        ]
+        
+        for service in srv_services:
             if limit and count >= limit:
                 break
-                
-            url = f"https://crt.sh/?q=%.25252.{base_domain}&output=json"
             
+            srv_domain = f"{service}.{base_domain}"
             try:
-                await asyncio.sleep(2)
-                async with self.session.get(url) as resp:
-                    if resp.status != 200:
-                        continue
-                    data = await resp.json()
-
-                for cert in data:
+                srv_answers = self.resolver.resolve(srv_domain, 'SRV')
+                
+                for rdata in srv_answers:
+                    target = rdata.target.to_text().rstrip('.')
                     if limit and count >= limit:
-                        break
-                    domain = cert['name_value'].strip()
-                    # Handle wildcards
-                    domain = domain.lstrip('*.')
-                    if self.add_domain(domain):
+                        return count
+                    if self.add_domain(target):
                         count += 1
-                        print(f"  [crt.sh] {domain}")
-
-            except Exception as e:
-                print(f"  [crt.sh] Error: {e}")
-
+                        print(f"  [DNS-SRV] {target}")
+                        
+            except:
+                pass
+        
         return count
 
-    async def source_censys(self, ip: str, limit: Optional[int] = None) -> int:
-        """Censys search (requires API key for full results)"""
+    # ==================== DNS CNAME Chain ====================
+
+    def dns_cname_chain(self, ip: str, limit: Optional[int] = None) -> int:
+        """Follow CNAME chain to find related domains"""
         count = 0
-        api_id = self.api_keys.get('censys_api_id')
-        api_secret = self.api_keys.get('censys_api_secret')
         
-        if not api_id or not api_secret:
-            print(f"  [Censys] Skipped - no API key provided")
+        # Get base domain from PTR
+        base_domain = None
+        try:
+            reverse_name = dns.reversename.from_address(ip)
+            ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
+            if ptr_answers:
+                base_domain = str(ptr_answers[0]).rstrip('.')
+        except:
+            pass
+        
+        if not base_domain:
             return 0
         
-        url = "https://search.censys.io/api/v2/hosts/search"
-        query = f"ip:{ip}"
+        # Common CNAME prefixes
+        cnames = ['www', 'mail', 'ftp', 'api', 'app', 'm', 'mobile']
         
-        try:
-            auth = aiohttp.BasicAuth(api_id, api_secret)
-            await asyncio.sleep(1)
+        for cname in cnames:
+            if limit and count >= limit:
+                break
             
-            async with self.session.post(url, auth=auth, json={"query": query, "per_page": 100}) as resp:
-                if resp.status != 200:
-                    return 0
-                data = await resp.json()
-
-            if 'result' in data and 'hits' in data['result']:
-                for host in data['result']['hits']:
+            test_domain = f"{cname}.{base_domain}"
+            try:
+                # Try CNAME lookup
+                cname_answers = self.resolver.resolve(test_domain, 'CNAME')
+                
+                for rdata in cname_answers:
+                    cname_target = rdata.target.to_text().rstrip('.')
                     if limit and count >= limit:
-                        break
-                    if 'names' in host:
-                        for domain in host['names']:
-                            if self.add_domain(domain):
-                                count += 1
-                                print(f"  [Censys] {domain}")
-
-        except Exception as e:
-            print(f"  [Censys] Error: {e}")
-
-        return count
-
-    async def source_shodan(self, ip: str, limit: Optional[int] = None) -> int:
-        """Shodan API (requires API key)"""
-        count = 0
-        api_key = self.api_keys.get('shodan_api_key')
-        
-        if not api_key:
-            print(f"  [Shodan] Skipped - no API key provided")
-            return 0
-        
-        url = f"https://api.shodan.io/shodan/host/{ip}?key={api_key}"
-        
-        try:
-            await asyncio.sleep(1)
-            async with self.session.get(url) as resp:
-                if resp.status != 200:
-                    return 0
-                data = await resp.json()
-
-            if 'hostnames' in data:
-                for hostname in data['hostnames']:
-                    if limit and count >= limit:
-                        break
-                    if self.add_domain(hostname):
+                        return count
+                    if self.add_domain(cname_target):
                         count += 1
-                        print(f"  [Shodan] {hostname}")
-
-        except Exception as e:
-            print(f"  [Shodan] Error: {e}")
-
-        return count
-
-    async def source_zoomeye(self, ip: str, limit: Optional[int] = None) -> int:
-        """ZoomEye API (requires API key)"""
-        count = 0
-        api_key = self.api_keys.get('zoomeye_api_key')
+                        print(f"  [DNS-CNAME] {cname_target}")
+                        
+            except:
+                pass
         
-        if not api_key:
-            print(f"  [ZoomEye] Skipped - no API key provided")
-            return 0
-        
-        url = f"https://api.zoomeye.org/host/search?query=ip:{ip}"
-        
-        try:
-            headers = {'API-KEY': api_key}
-            await asyncio.sleep(1)
-            
-            async with self.session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    return 0
-                data = await resp.json()
-
-            if 'matches' in data:
-                for match in data['matches']:
-                    if limit and count >= limit:
-                        break
-                    if 'geoinfo' in match and 'domains' in match['geoinfo']:
-                        for domain in match['geoinfo']['domains']:
-                            if self.add_domain(domain):
-                                count += 1
-                                print(f"  [ZoomEye] {domain}")
-
-        except Exception as e:
-            print(f"  [ZoomEye] Error: {e}")
-
-        return count
-
-    async def source_virustotal(self, ip: str, limit: Optional[int] = None) -> int:
-        """VirusTotal API (requires API key)"""
-        count = 0
-        api_key = self.api_keys.get('virustotal_api_key')
-        
-        if not api_key:
-            print(f"  [VirusTotal] Skipped - no API key provided")
-            return 0
-        
-        url = f"https://www.virustotal.com/api/v3/ip_addresses/{ip}"
-        
-        try:
-            headers = {'x-apikey': api_key}
-            await asyncio.sleep(1)
-            
-            async with self.session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    return 0
-                data = await resp.json()
-
-            if 'data' in data and 'attributes' in data['data']:
-                if 'last_dns_records' in data['data']['attributes']:
-                    for record in data['data']['attributes']['last_dns_records']:
-                        if record.get('type') == 'CNAME':
-                            domain = record.get('value', '').rstrip('.')
-                            if limit and count >= limit:
-                                break
-                            if self.add_domain(domain):
-                                count += 1
-                                print(f"  [VirusTotal] {domain}")
-
-        except Exception as e:
-            print(f"  [VirusTotal] Error: {e}")
-
         return count
 
     def save_output(self):
@@ -585,6 +508,7 @@ class ReverseLookup:
                 f.write(f'\n\nTotal: {len(sorted_domains)} domains')
 
         elif self.output_format == 'json':
+            import json
             with open(self.output_file, 'w') as f:
                 json.dump({
                     'domains': sorted_domains,
@@ -599,27 +523,30 @@ class ReverseLookup:
 
         print(f"\n✅ Saved {len(sorted_domains)} domains to {self.output_file}")
 
-    async def lookup(self, ip: str, sources: List[str] = None, limit: Optional[int] = None):
+    def lookup(self, ip: str, sources: List[str] = None, limit: Optional[int] = None):
         """Perform reverse IP lookup"""
         print(f"\n🔍 Reverse IP Lookup: {ip}")
         print(f"{'='*50}\n")
 
         if sources is None:
-            sources = ['dns-ptr', 'viewdns', 'bing', 'duckduckgo', 'netcraft', 
-                      'yougetsignal', 'iphostinfo', 'domainbigdata', 'myip', 'crtsh']
+            sources = ['dns-ptr', 'host', 'bruteforce', 'dns-mx', 'dns-ns', 'dns-txt', 'dns-srv']
 
         start_time = time.time()
 
         # Run all sources
-        tasks = []
+        total_found = 0
         for source in sources:
-            source_method = getattr(self, f'source_{source}', None)
+            source_method = getattr(self, f'source_{source.replace("-", "_")}', None)
+            if not source_method:
+                # Try without prefix
+                source_method = getattr(self, source.replace("-", "_"), None)
+            
             if source_method:
-                tasks.append(source_method(ip, limit))
-
-        if tasks:
-            results = await asyncio.gather(*tasks)
-            total_found = sum(results)
+                try:
+                    found = source_method(ip, limit)
+                    total_found += found
+                except Exception as e:
+                    print(f"  [{source.upper()}] Error: {e}")
 
         elapsed = time.time() - start_time
 
@@ -660,7 +587,6 @@ def validate_domain(domain: str) -> bool:
 def resolve_domain(domain: str) -> Tuple[bool, str]:
     """Resolve domain to IP address"""
     try:
-        # Get the first A record
         ip = socket.gethostbyname(domain)
         return True, ip
     except socket.gaierror as e:
@@ -669,48 +595,38 @@ def resolve_domain(domain: str) -> Tuple[bool, str]:
         return False, f"Error: {e}"
 
 
-async def main():
+def main():
     parser = argparse.ArgumentParser(
-        description='Enhanced Reverse IP Lookup - Find all domains on an IP or from a domain',
+        description='Pure DNS Reverse IP Lookup - Find domains using only DNS queries',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s 8.8.8.8
   %(prog)s google.com
   %(prog)s 8.8.8.8 --limit 50
-  %(prog)s google.com --sources viewdns bing crtsh --output results.json
+  %(prog)s google.com --sources dns-ptr host bruteforce --output results.json
   %(prog)s 8.8.8.8 --format json --output domains.json
 
 DNS Sources:
   dns-ptr      - DNS PTR record lookup
-  dns-bruteforce - Common subdomain enumeration
-  host         - System host command
+  dns-axfr      - DNS Zone Transfer (AXFR) if allowed
+  dns-mx        - DNS MX records (mail servers)
+  dns-ns        - DNS NS records (name servers)
+  dns-txt       - DNS TXT records (may contain domains)
+  dns-any       - DNS ANY record lookup
+  dns-srv       - DNS SRV records (services)
+  dns-cname     - DNS CNAME chain lookup
 
-Web Scraping Sources:
-  viewdns      - ViewDNS.info (free, good coverage)
-  bing         - Bing search (may find more)
-  duckduckgo   - DuckDuckGo search
-  netcraft     - Netcraft site report
-  yougetsignal - YouGetSignal reverse lookup
-  iphostinfo   - IPHostInfo domains
-  domainbigdata - DomainBigData lookup
-  myip         - MyIP.ms reverse IP
+Brute Force Sources:
+  bruteforce    - Common subdomain enumeration (100+ subdomains)
 
-Certificate Sources:
-  crtsh        - Certificate Transparency logs
+System Commands:
+  host          - System host command
+  nslookup      - System nslookup command
+  dig           - System dig command (if available)
 
-API Sources (requires API keys):
-  censys       - Censys API (--censys-api-id and --censys-api-secret)
-  shodan       - Shodan API (--shodan-api-key)
-  zoomeye      - ZoomEye API (--zoomeye-api-key)
-  virustotal   - VirusTotal API (--virustotal-api-key)
-
-API Key Configuration:
-  Pass API keys via command line or environment variables:
-  CENSYS_API_ID, CENSYS_API_SECRET
-  SHODAN_API_KEY
-  ZOOMEYE_API_KEY
-  VIRUSTOTAL_API_KEY
+Note: This version uses ONLY DNS queries and system tools.
+No external data sources or APIs are used.
         """
     )
 
@@ -722,34 +638,12 @@ API Key Configuration:
     parser.add_argument('--format', '-f', choices=['txt', 'json', 'csv'],
                         default='txt', help='Output format (default: txt)')
     parser.add_argument('--sources', '-s', nargs='+',
-                        choices=['dns-ptr', 'dns-bruteforce', 'host', 'viewdns', 'bing', 
-                                'duckduckgo', 'netcraft', 'yougetsignal', 'iphostinfo', 
-                                'domainbigdata', 'myip', 'crtsh', 'censys', 'shodan', 
-                                'zoomeye', 'virustotal'],
-                        help='Data sources to use (default: all non-API sources)')
-    
-    # API Key arguments
-    parser.add_argument('--censys-api-id', type=str, 
-                        help='Censys API ID (or set CENSYS_API_ID env var)')
-    parser.add_argument('--censys-api-secret', type=str,
-                        help='Censys API Secret (or set CENSYS_API_SECRET env var)')
-    parser.add_argument('--shodan-api-key', type=str,
-                        help='Shodan API Key (or set SHODAN_API_KEY env var)')
-    parser.add_argument('--zoomeye-api-key', type=str,
-                        help='ZoomEye API Key (or set ZOOMEYE_API_KEY env var)')
-    parser.add_argument('--virustotal-api-key', type=str,
-                        help='VirusTotal API Key (or set VIRUSTOTAL_API_KEY env var)')
+                        choices=['dns-ptr', 'dns-axfr', 'dns-mx', 'dns-ns', 'dns-txt',
+                                'dns-any', 'dns-srv', 'dns-cname', 'bruteforce',
+                                'host', 'nslookup', 'dig'],
+                        help='DNS sources to use (default: dns-ptr, host, bruteforce, dns-mx, dns-ns, dns-txt, dns-srv)')
 
     args = parser.parse_args()
-
-    # Collect API keys from args or environment
-    api_keys = {
-        'censys_api_id': args.censys_api_id or os.environ.get('CENSYS_API_ID'),
-        'censys_api_secret': args.censys_api_secret or os.environ.get('CENSYS_API_SECRET'),
-        'shodan_api_key': args.shodan_api_key or os.environ.get('SHODAN_API_KEY'),
-        'zoomeye_api_key': args.zoomeye_api_key or os.environ.get('ZOOMEYE_API_KEY'),
-        'virustotal_api_key': args.virustotal_api_key or os.environ.get('VIRUSTOTAL_API_KEY'),
-    }
 
     # Determine if target is IP or domain
     target_ip = args.target
@@ -776,8 +670,8 @@ API Key Configuration:
         sys.exit(1)
 
     # Perform lookup
-    async with ReverseLookup(args.output, args.format, api_keys) as lookup:
-        domains = await lookup.lookup(target_ip, args.sources, args.limit)
+    lookup = ReverseLookup(args.output, args.format)
+    domains = lookup.lookup(target_ip, args.sources, args.limit)
 
     # Print summary
     if not args.output or args.format == 'txt':
@@ -788,4 +682,4 @@ API Key Configuration:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
