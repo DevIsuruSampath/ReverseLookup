@@ -198,18 +198,15 @@ class ReverseLookup:
         if not base_domain:
             return 0
         
-        # Skip cloud infra for CT
-        if self.is_cloud_or_registry_domain(base_domain):
-            return 0
-        
+        # Don't skip cloud infra for CT - use it to search for real domains
         url = f"https://crt.sh/?q=%.25252.{base_domain}&output=json"
         
         try:
             with urllib.request.urlopen(url, timeout=20) as response:
                 data = json.loads(response.read().decode('utf-8'))
 
-            # Limit to first 30 certificates for speed
-            for cert in data[:30]:
+            # Limit to first 50 certificates for more results
+            for cert in data[:50]:
                 domain = cert['name_value'].strip()
                 domain = domain.lstrip('*.')
                 if self.add_domain(domain):
@@ -240,11 +237,7 @@ class ReverseLookup:
         if not base_domain:
             return 0
         
-        # Skip cloud infra for bruteforce
-        if self.is_cloud_or_registry_domain(base_domain):
-            return 0
-        
-        # 40 most common subdomains
+        # Don't skip cloud infra for bruteforce - try to find subdomains
         subdomains = [
             'www', 'mail', 'api', 'm', 'mobile', 'app', 'dev', 'test',
             'cdn', 'static', 'assets', 'img', 'images', 'video', 'media',
@@ -328,10 +321,6 @@ class ReverseLookup:
             pass
         
         if not base_domain:
-            return 0
-        
-        # Skip cloud infra for Amass
-        if self.is_cloud_or_registry_domain(base_domain):
             return 0
         
         try:
