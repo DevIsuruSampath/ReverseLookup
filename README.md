@@ -1,32 +1,47 @@
-# Reverse IP Lookup Tool - Advanced Python Version
+# Reverse IP Lookup Tool - Smart Version
 
-**Advanced reverse IP lookup** using Python techniques, DNS queries, Certificate Transparency, HTTP scraping, SSL/TLS parsing, and more. No external APIs or data sources required.
+**Smart reverse IP lookup** with advanced filtering, Kali Linux tools (amass, dnsrecon, sublist3r), Certificate Transparency, and subdomain enumeration. No external APIs required.
 
 ## Features
 
-- 🚀 **Advanced Python techniques** - Certificate Transparency, HTTP headers, SSL parsing
-- 📊 **12+ sources** - Multiple intelligent discovery methods
-- 🔍 **Smart discovery** - CNAME chains, subdomain enumeration (150+)
-- 🛡️ **Cross-platform** - Works on Linux, Kali, Termux, macOS, Windows
-- ⚡ **Parallel processing** - Concurrent DNS and HTTP queries
+- 🎯 **Smart filtering** - Removes WHOIS noise, abuse domains, CDN infrastructure
+- 🛡️ **Kali Linux tools** - Amass, DNSrecon, Sublist3r integration
+- 📊 **10+ sources** - Certificate Transparency, DNS records, bruteforce
+- ⚡ **Parallel processing** - 30 threads for fast subdomain enumeration
 - 🧩 **Domain support** - Auto-resolves domains to IPs
 - 💾 **Flexible output** - TXT, JSON, or CSV formats
-- 📦 **Minimal dependencies** - Only dnspython required
+- 📦 **Zero dependencies** - Only dnspython required
+- 📱 **Cross-platform** - Linux, Kali, Termux, macOS, Windows
 
 ## Installation
 
+### Kali Linux (Recommended)
+
 ```bash
-# Clone or navigate to directory
+# Clone repo
+git clone https://github.com/DevIsuruSampath/ReverseLookup.git
 cd ReverseLookup
 
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Optional: Install WHOIS (Linux/Kali)
-sudo apt install -y whois
+# Install Kali tools (for best results)
+sudo apt update
+sudo apt install -y amass dnsrecon sublist3r
+```
 
-# Optional: Install DNSrecon (Kali Linux)
-sudo apt install -y dnsrecon
+### Standard Linux
+
+```bash
+pip install dnspython
+# Tool works without Kali tools
+```
+
+### Termux (Android)
+
+```bash
+pkg install python python-pip
+pip install dnspython
 ```
 
 ## Usage
@@ -47,64 +62,48 @@ python main.py 8.8.8.8 --output results.txt
 python main.py google.com --format json --output domains.json
 ```
 
-## Advanced Python Techniques
+### Kali Linux Tools
 
-| Technique | Description | What it finds |
-|-----------|-------------|---------------|
-| **crt.sh** | Certificate Transparency logs | All SSL certificates ever issued |
-| **HTTP-Header** | HTTP header scraping | Domains in headers (Server, X-Powered-By, etc.) |
-| **SSL-Cert** | SSL/TLS certificate parsing | Domains from certificates (CN, SAN) |
-| **CNAME-Chain** | CNAME chain traversal | Aliases and redirect domains |
-| **Advanced-Brute** | Parallel subdomain enumeration | 150+ common subdomains |
-| **DNS-PTR** | DNS PTR record | Primary reverse DNS |
-| **DNS-MX** | DNS MX records | Mail server domains |
-| **DNS-NS** | DNS NS records | Nameserver domains |
-| **DNS-SRV** | DNS SRV records | Service-related domains |
-| **WHOIS** | WHOIS lookup | Domain ownership info |
-| **DNSrecon** | Kali tool (optional) | DNS reconnaissance |
+| Tool | Description | Install Command |
+|------|-------------|-----------------|
+| **Amass** | Asset discovery | `apt install amass` |
+| **DNSrecon** | DNS reconnaissance | `apt install dnsrecon` |
+| **Sublist3r** | Subdomain enumeration | `apt install sublist3r` |
 
-## Data Sources Explained
+## Smart Filtering
 
-### Certificate Transparency (crt.sh)
-- Queries public CT logs
-- Finds ALL SSL certificates ever issued for a domain
-- Includes expired and subdomain certificates
-- No rate limiting
-- **Very powerful for discovery**
+### Removed Domains (Noise)
 
-### HTTP Header Scraping
-- Sends HTTP requests to common endpoints
-- Extracts domains from headers:
-  - `Server`
-  - `X-Powered-By`
-  - `Via`
-  - `X-Forwarded-For`
-  - `Location` (redirects)
+The tool automatically filters out:
 
-### SSL/TLS Certificate Parsing
-- Connects to HTTPS endpoints
-- Extracts domains from:
-  - Common Name (CN)
-  - Subject Alternative Names (SAN)
-- Finds virtual host configurations
+- **Registry domains**: arin.net, rdap.arin.net, ripe.net, apnic.net, etc.
+- **Abuse domains**: dis.abuse, dis.incapsula.noc, knack.black, etc.
+- **CDN infrastructure**: cloudflare.net, akamai.net, fastly.net, etc.
+- **AWS internal**: compute.amazonaws.com, ec2.internal, etc.
+- **IP-like domains**: Numeric patterns (e.g., 192-168-1-1)
 
-### CNAME Chain Traversal
-- Follows CNAME redirects
-- Up to 3 hops deep
-- Finds aliased domains
+### Prioritized Domains
 
-### Advanced Subdomain Brute Force
-- 150+ subdomain patterns including:
-  - Common (www, mail, api, dev)
-  - Infrastructure (cdn, static, cache)
-  - Services (blog, shop, portal)
-  - Tech stack (db, redis, elastic)
-  - DevOps (k8s, docker, jenkins)
-  - Regional (us-east, eu-west, ap-south)
-  - Versioned (api-v1, v2, v3)
-  - Platform (ios, android, mobile)
-- **Parallel processing** for speed
-- Tests against A, AAAA, CNAME records
+The tool prioritizes:
+- Real domains on the target IP
+- Related subdomains
+- Service domains
+- Infrastructure domains
+
+## Data Sources (All run automatically)
+
+### Python Sources (Always Available)
+- **DNS-PTR** - Primary reverse DNS
+- **crt.sh** - Certificate Transparency logs
+- **DNS-MX** - Mail server domains
+- **DNS-NS** - Nameserver domains
+- **DNS-SRV** - Service-related domains
+- **Advanced-Brute** - 90+ prioritized subdomains (parallel)
+
+### Kali Linux Tools (Optional)
+- **Amass** - Comprehensive asset discovery
+- **DNSrecon** - DNS reconnaissance
+- **Sublist3r** - Subdomain enumeration
 
 ## Output Formats
 
@@ -140,90 +139,97 @@ mail.google.com
 python main.py 8.8.8.8
 ```
 
-### Advanced Scan (all Python techniques)
+### Kali Linux - Full Scan
 ```bash
-python main.py viber.com --output viber-domains.txt
+# Install Kali tools first
+sudo apt install -y amass dnsrecon sublist3r
+
+# Run full scan
+python main.py 1.1.1.1 --output full-scan.txt
 ```
 
 ### Domain Lookup
 ```bash
-python main.py google.com --format json --output google.json
+python main.py viber.com --output viber-domains.txt
 ```
 
-### With Kali Tools (if available)
+### Different Targets
 ```bash
-# Install Kali tools
-sudo apt install -y whois dnsrecon
+# DNS servers
+python main.py 8.8.8.8
+python main.py 1.1.1.1
 
-# Run with all sources
-python main.py 1.1.1.1 --output all-domains.txt
+# Popular domains
+python main.py google.com
+python main.py facebook.com
+python main.py dialog.lk
 ```
 
 ## How It Works
 
 1. **Input**: IP address or domain name
 2. **Resolution**: If domain, resolves to IP
-3. **Certificate Transparency**: Queries crt.sh for all certificates
-4. **HTTP Scraping**: Tests common endpoints and scrapes headers
-5. **SSL Parsing**: Extracts domains from SSL certificates
-6. **CNAME Traversal**: Follows CNAME chains
-7. **Subdomain Bruteforce**: Parallel testing of 150+ subdomains
-8. **DNS Records**: PTR, MX, NS, SRV lookups
-9. **WHOIS**: Queries WHOIS for domain info
-10. **Aggregation**: Collects all unique domains
-11. **Output**: Formats and saves results
+3. **DNS Queries**: PTR, MX, NS, SRV lookups
+4. **Certificate Transparency**: Queries crt.sh for SSL certificates
+5. **Subdomain Bruteforce**: Tests 90+ prioritized subdomains in parallel (30 threads)
+6. **Kali Tools**: Runs Amass, DNSrecon, Sublist3r if available
+7. **Smart Filtering**: Removes noise and irrelevant domains
+8. **Aggregation**: Collects all unique, relevant domains
+9. **Output**: Formats and saves results
 
-## Subdomains Tested (150+)
+## Subdomains Tested (90+ Prioritized)
 
-### Common (20)
-www, mail, ftp, admin, api, dev, test, staging, production, app, apps, m, wap, web
+### Priority 1: Most Common (10)
+www, mail, api, m, mobile, app, dev, test, admin, portal, panel
 
-### Infrastructure (25)
-cdn, static, assets, img, images, video, media, upload, download, files, docs, wiki, help, support, forum, community, blog, shop, store, portal, dashboard, panel, secure, vpn, proxy, gateway, lb, loadbalancer
+### Priority 2: Infrastructure (20)
+cdn, static, assets, img, images, video, media, upload, download, files, docs, blog, shop, store, support, help, community, forum, wiki
 
-### Services (15)
-pop, imap, smtp, exchange, email, webmail, db, database, mysql, postgres, mongodb, redis, elastic, cache, memcache, varnish
+### Priority 3: Auth (10)
+auth, login, signin, signup, register, account, oauth, sso, identity, password, token
 
-### DevOps (20)
-jenkins, gitlab, github, git, nexus, artifactory, sonarqube, grafana, prometheus, kibana, elasticsearch, k8s, kubernetes, docker, registry, helm, argo, consul, vault, nomad, terraform, ansible
+### Priority 4: Mail (10)
+smtp, pop, imap, exchange, webmail, email, mail1, mail2, mx, ns1, ns2
 
-### Monitoring (10)
-monitor, alert, log, metrics, traces, jaeger, zipkin, tempo, loki, promtail, fluentd
+### Priority 5: Tech (15)
+db, database, cache, redis, mongo, elastic, search, kibana, grafana, prometheus, log, metrics, monitor
 
-### Regional (20)
-us, eu, asia, na, sa, emea, apac, latam, us-east, us-west, eu-west, eu-central, eu-north, eu-south, ap-south, ap-east, ap-north, ap-southeast, sa-east
+### Priority 6: DevOps (15)
+jenkins, gitlab, github, git, svn, nexus, artifactory, docker, k8s, kubernetes, helm, argo, consul, vault, nomad
 
-### Versioned (10)
-v1, v2, v3, v4, v5, api-v1, api-v2, api-v3, api-v4, api-v5
+### Priority 7: Security (10)
+ssl, secure, vpn, firewall, gateway, proxy, lb, loadbalancer, waf, ids, ips
 
-### Platform (10)
-ios, android, mobile, tablet, desktop, web, browser, app, client, server, backend
+### Priority 8: Regional (10)
+us, eu, asia, na, sa, emea, apac, us-east, us-west, eu-west, eu-central, ap-south
 
-### Business (15)
-hr, crm, erp, mail, email, calendar, drive, storage, backup, archive, analytics, stats, reports, billing, account, payment
+### Priority 9: Versioned (10)
+v1, v2, v3, v4, api-v1, api-v2, api-v3, web-v1, web-v2, mobile-v1
 
-### Security (10)
-ssl, secure, auth, oauth, sso, login, signin, signup, register, password, token
+### Priority 10: Platform (10)
+ios, android, web, client, server, backend, frontend, api-v1, api-v2, app-v1, app-v2
 
-### Misc (20)
-beta, alpha, preview, demo, sandbox, staging, qa, uat, prod, live, production, internal, external, public, private, admin, manage, console
+### Priority 11: Business (15)
+hr, crm, erp, billing, payment, checkout, cart, order, calendar, drive, storage, backup, archive
 
 ## Performance
 
 - **DNS lookups**: Fast (0.5-2 seconds)
 - **Certificate Transparency**: Medium (5-15 seconds)
-- **HTTP Scraping**: Fast (1-3 seconds per endpoint)
-- **SSL Parsing**: Fast (1-2 seconds per endpoint)
-- **Subdomain Bruteforce**: Medium (10-30 seconds)
-- **Total scan**: 20-60 seconds depending on target
+- **Parallel Bruteforce**: Fast (5-15 seconds for 90+ subdomains)
+- **Amass**: Slow (30-120 seconds - very comprehensive)
+- **DNSrecon**: Medium (20-60 seconds)
+- **Sublist3r**: Medium (15-45 seconds)
+- **Total scan**: 30-180 seconds depending on target
 
 ## Advantages
 
+✅ **Smart filtering** - Removes WHOIS noise and abuse domains
+✅ **Kali optimized** - Uses Amass, DNSrecon, Sublist3r
 ✅ **No APIs** - Uses public CT logs and direct queries
 ✅ **No rate limits** - Parallel processing
 ✅ **Very comprehensive** - Multiple discovery methods
-✅ **Smart** - Filters out false positives (AWS, cloud providers)
-✅ **Fast** - Concurrent lookups
+✅ **Fast** - Parallel subdomain enumeration (30 threads)
 ✅ **Privacy** - No data shared with third parties
 ✅ **Cross-platform** - Works everywhere Python runs
 ✅ **Optional Kali tools** - Works without them
@@ -234,37 +240,42 @@ beta, alpha, preview, demo, sandbox, staging, qa, uat, prod, live, production, i
 - Python 3.7+
 - dnspython
 
-### Optional (for better results)
-- whois
-- dnsrecon (Kali)
+### Recommended (Kali Linux)
+- amass
+- dnsrecon
+- sublist3r
 
 ## Tips
 
-- **Best results**: All Python techniques run automatically
-- **Deep scan**: Certificate Transparency + SSL Parsing + HTTP Headers
-- **Quick scan**: DNS-PTR + DNS-MX + DNS-NS
-- **Subdomain discovery**: Advanced-Brute finds 150+ subdomains
-- **AWS/Cloud IPs**: Automatically filtered, but check parent domain
+- **Kali users**: Install Amass for best results (most comprehensive)
+- **Quick scan**: DNS-PTR + crt.sh + Advanced-Brute
+- **Deep scan**: Add Amass + DNSrecon + Sublist3r
+- **Smart filtering**: Automatically removes noise domains
+- **Parallel processing**: Bruteforce uses 30 threads for speed
 
 ## Troubleshooting
 
-### No Domains Found
-```
-# Some IPs (AWS, GCP) don't expose many domains
-# Try the parent domain instead
+### Still Getting Noise Domains
+
+```bash
+# The smart filter should remove most noise
+# If you still see noise, check the domain list manually
 ```
 
-### SSL/TLS Certificate Errors
-```
-# Normal if no SSL certificate on that port
-# Tool will continue to other methods
+### Amass Not Finding Anything
+
+```bash
+# Amass uses passive mode (no active scanning)
+# Some domains don't have many public certificates
+# Try other sources: DNSrecon, Sublist3r
 ```
 
-### Timeout Errors
-```
-# Certificate Transparency can be slow
-# HTTP scraping has built-in timeout
-# Wait for completion
+### DNSrecon Output File Not Found
+
+```bash
+# Make sure /tmp directory is writable
+# Or try running with sudo
+sudo python main.py 1.1.1.1
 ```
 
 ## License
@@ -273,8 +284,8 @@ MIT
 
 ## Contributing
 
-Pull requests welcome! Add more techniques or improve existing ones.
+Pull requests welcome! Add more tools or improve smart filtering.
 
 ## Credits
 
-Built with Python, dnspython, and public Certificate Transparency logs.
+Built with Python, dnspython, and Kali Linux tools (Amass, DNSrecon, Sublist3r).
