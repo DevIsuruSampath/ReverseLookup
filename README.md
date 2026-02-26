@@ -76,9 +76,12 @@ The tool automatically filters out:
 
 - **Registry domains**: arin.net, rdap.arin.net, ripe.net, apnic.net, etc.
 - **Abuse domains**: dis.abuse, dis.incapsula.noc, knack.black, etc.
-- **CDN infrastructure**: cloudflare.net, akamai.net, fastly.net, etc.
-- **AWS internal**: compute.amazonaws.com, ec2.internal, etc.
+- **AWS infrastructure**: amazonaws.com, compute.amazonaws.com, ec2.internal, waf.amazonaws.com, support.amazonaws.com, www.amazonaws.com, cloudfront.net, s3.amazonaws.com, route53.amazonaws.com
+- **GCP infrastructure**: googleapis.com, googleusercontent.com, cloudfunctions.net, appspot.com
+- **Azure infrastructure**: cloudapp.azure.com, azurewebsites.net, windowsazure.com, azure.net
+- **CDN infrastructure**: cloudflare.net, fastly.net, akamai.net, cdn77.net, cdn.jsdelivr.net
 - **IP-like domains**: Numeric patterns (e.g., 192-168-1-1)
+- **Amass noise**: ASN, netblock, managed_by, rirorganization lines
 
 ### Prioritized Domains
 
