@@ -185,6 +185,8 @@ The bruteforce source tests 60+ common subdomains:
 
 This tool is fully compatible with Termux on Android. It automatically detects if `/etc/resolv.conf` is not available (as in Termux) and falls back to public DNS servers (Google DNS, Cloudflare DNS).
 
+For detailed Termux installation and troubleshooting, see [TERMUX.md](TERMUX.md).
+
 To use on Termux:
 
 ```bash
