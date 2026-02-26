@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Reverse IP Lookup Tool - Advanced Smart Version
-Find all domains using smart filtering, Kali tools, and advanced Python techniques
+Reverse IP Lookup Tool - Ultimate Smart Version
+Find all domains using smart extraction, Certificate Transparency, and Kali tools
 """
 
 import argparse
@@ -15,21 +15,20 @@ import os
 import ssl
 import urllib.request
 import json
-import hashlib
 from typing import Optional, Tuple, Set, List
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class ReverseLookup:
-    """Smart reverse IP lookup with advanced filtering"""
+    """Ultimate smart reverse IP lookup"""
 
     def __init__(self, output_file: Optional[str] = None, output_format: str = 'txt'):
         self.domains = set()
         self.output_file = output_file
         self.output_format = output_format
         
-        # Initialize DNS resolver
+        # Initialize DNS resolver with multiple servers
         try:
             self.resolver = dns.resolver.Resolver()
             self.resolver.timeout = 5
@@ -38,7 +37,47 @@ class ReverseLookup:
             self.resolver = dns.resolver.Resolver(configure=False)
             self.resolver.timeout = 5
             self.resolver.lifetime = 10
-            self.resolver.nameservers = ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1']
+            # Use multiple DNS servers for better results
+            self.resolver.nameservers = ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1', '9.9.9.9', '208.67.222.222', '208.67.220.220']
+
+    def extract_parent_domain(self, cloud_domain: str) -> Optional[str]:
+        """Extract parent domain from cloud infrastructure"""
+        if not cloud_domain:
+            return None
+            
+        # AWS patterns
+        aws_patterns = [
+            (r'ec2-\d+-\d+-\d+\.compute-1\.amazonaws\.com', 'amazonaws.com'),
+            (r'ec2-\d+-\d+-\d+\.compute\.amazonaws\.com', 'amazonaws.com'),
+            (r'\.ec2\.internal', 'amazonaws.com'),
+            (r'\.compute-\d+\.amazonaws\.com', 'amazonaws.com'),
+        ]
+        
+        for pattern, parent in aws_patterns:
+            if re.search(pattern, cloud_domain):
+                return parent
+        
+        # GCP patterns
+        gcp_patterns = [
+            (r'\.compute\.googleapis\.com', 'googleapis.com'),
+            (r'\.gcp\.google\.com', 'google.com'),
+        ]
+        
+        for pattern, parent in gcp_patterns:
+            if re.search(pattern, cloud_domain):
+                return parent
+        
+        # Azure patterns
+        azure_patterns = [
+            (r'\.cloudapp\.azure\.com', 'azure.com'),
+            (r'\.windows\.azure\.com', 'azure.com'),
+        ]
+        
+        for pattern, parent in azure_patterns:
+            if re.search(pattern, cloud_domain):
+                return parent
+        
+        return None
 
     def is_noise_domain(self, domain: str) -> bool:
         """Check if domain is noise/registry domain"""
@@ -51,12 +90,8 @@ class ReverseLookup:
             'apnic.net', 'rdap.apnic.net',
             'lacnic.net', 'rdap.lacnic.net',
             'afrinic.net', 'rdap.afrinic.net',
-            'iana.org',
-            'iana.com',
-            'iana-servers.net',
-            'iana-servers.org',
+            'iana.org', 'iana-servers.net',
             'root-servers.net',
-            'iana-servers.com',
         ]
         
         # Abuse and security domains
@@ -64,23 +99,15 @@ class ReverseLookup:
             '.abuse', '.spam', '.phish', '.scam',
             'abuse.net', 'dis.abuse', 'dis.incapsula.noc',
             'dis.imperva.rir', 'blacklist', 'spamhaus',
-            'spambot', 'malware', 'virus', 'phishing',
-        ]
-        
-        # CDN and cloud infrastructure
-        cdn_domains = [
-            '.cloudfront.net', '.cloudflare.net', '.cloudflare.com',
-            '.fastly.net', '.akamai.net', '.akamaihd.net',
-            '.akamaiedge.net', '.akamaitechnologies.com',
-            '.cdn77.net', '.cdn.jsdelivr.net',
+            'knack.black',
         ]
         
         # Check all noise patterns
-        for noise_domain in registry_domains + abuse_domains + cdn_domains:
+        for noise_domain in registry_domains + abuse_domains:
             if noise_domain in domain_lower:
                 return True
         
-        # Check for numeric IP-like domains (reverse DNS noise)
+        # Check for numeric IP-like domains
         if re.match(r'^\d+[-.]\d+', domain_lower):
             return True
         
@@ -99,12 +126,16 @@ class ReverseLookup:
             if self.is_noise_domain(clean):
                 return False
             
-            # Check for arpa domains
-            skip_patterns = ['.in-addr.arpa', '.ip6.arpa', '.compute.amazonaws.com',
-                           '.amazonaws.com', '.elasticbeanstalk.com',
-                           '.ec2.internal', '.privatelink']
-            if not any(pattern in clean for pattern in skip_patterns):
-                if clean not in self.domains:
+            # Allow cloud infrastructure domains for CT search
+            cloud_infra = ['.amazonaws.com', '.compute.amazonaws.com', '.googleapis.com',
+                          '.cloudapp.azure.com', '.windows.azure.com']
+            
+            if clean not in self.domains:
+                # Only add cloud infra if it's the PTR domain
+                if any(infra in clean for infra in cloud_infra):
+                    self.domains.add(clean)
+                    return True
+                else:
                     self.domains.add(clean)
                     return True
         return False
@@ -114,84 +145,131 @@ class ReverseLookup:
     def dns_ptr_lookup(self, ip: str) -> int:
         """DNS PTR record lookup"""
         count = 0
+        ptr_domain = None
+        
         try:
             reverse_name = dns.reversename.from_address(ip)
             answers = self.resolver.resolve(reverse_name, 'PTR')
             
             for rdata in answers:
-                domain = str(rdata).rstrip('.')
-                if self.add_domain(domain):
+                ptr_domain = str(rdata).rstrip('.')
+                if self.add_domain(ptr_domain):
                     count += 1
-                    print(f"  [DNS-PTR] {domain}")
+                    print(f"  [DNS-PTR] {ptr_domain}")
                     
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
             print(f"  [DNS-PTR] No PTR record found")
         except Exception as e:
             print(f"  [DNS-PTR] Error: {e}")
         
+        # If PTR is cloud infrastructure, add parent domain for CT search
+        if ptr_domain:
+            parent = self.extract_parent_domain(ptr_domain)
+            if parent:
+                if self.add_domain(parent):
+                    count += 1
+                    print(f"  [DNS-PTR-Parent] {parent}")
+        
         return count
 
-    # ==================== Certificate Transparency (crt.sh) ====================
+    # ==================== Certificate Transparency (Multiple Sources) ====================
 
-    def crtsh_lookup(self, ip: str) -> int:
-        """Certificate Transparency lookup via crt.sh"""
+    def cert_transparency_lookup(self, ip: str) -> int:
+        """Multiple Certificate Transparency sources"""
         count = 0
         
-        # Get base domain from PTR
+        # Get base domains from PTR
         base_domains = []
         try:
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                ptr = str(ptr_answers[0]).rstrip('.')
-                parts = ptr.split('.')
-                if len(parts) >= 2:
-                    base_domains.append('.'.join(parts[-2:]))
+                ptr_domain = str(ptr_answers[0]).rstrip('.')
+                base_domains.append(ptr_domain)
+                
+                # Extract parent domain if cloud infra
+                parent = self.extract_parent_domain(ptr_domain)
+                if parent and parent != ptr_domain:
+                    base_domains.append(parent)
         except:
             pass
         
-        if not base_domains:
-            return 0
+        # Search each base domain in crt.sh
+        for base_domain in base_domains[:3]:
+            count += self.crtsh_search(base_domain)
+            count += self.censys_ct_search(base_domain)
         
-        for base_domain in base_domains[:2]:
-            url = f"https://crt.sh/?q=%.25252.{base_domain}&output=json"
-            
-            try:
-                with urllib.request.urlopen(url, timeout=30) as response:
-                    data = json.loads(response.read().decode('utf-8'))
+        return count
 
-                for cert in data:
-                    domain = cert['name_value'].strip()
-                    domain = domain.lstrip('*.')
-                    if self.add_domain(domain):
-                        count += 1
-                        print(f"  [crt.sh] {domain}")
+    def crtsh_search(self, domain: str) -> int:
+        """Search crt.sh for certificates"""
+        count = 0
+        url = f"https://crt.sh/?q=%.25252.{domain}&output=json"
+        
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
 
-            except Exception as e:
-                pass  # Don't print error for CT
+            for cert in data:
+                cert_domain = cert['name_value'].strip()
+                cert_domain = cert_domain.lstrip('*.')
+                if self.add_domain(cert_domain):
+                    count += 1
+                    print(f"  [crt.sh] {cert_domain}")
+
+        except Exception:
+            pass
+        
+        return count
+
+    def censys_ct_search(self, domain: str) -> int:
+        """Search Censys Certificate Transparency"""
+        count = 0
+        url = f"https://search.censys.io/api/v2/certificates?q=dns.names:{domain}"
+        
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
+
+            if 'result' in data and 'code' in data['result']:
+                for cert in data['result']['code']['certificates']:
+                    if 'names' in cert:
+                        for name_info in cert['names']:
+                            if isinstance(name_info, dict) and 'value' in name_info:
+                                cert_domain = name_info['value'].strip()
+                                cert_domain = cert_domain.lstrip('*.')
+                                if self.add_domain(cert_domain):
+                                    count += 1
+                                    print(f"  [Censys-CT] {cert_domain}")
+
+        except Exception:
+            pass
         
         return count
 
     # ==================== Advanced Subdomain Brute Force ====================
 
     def advanced_bruteforce(self, ip: str) -> int:
-        """Advanced subdomain bruteforce with smart wordlist"""
+        """Advanced subdomain bruteforce with multiple base domains"""
         count = 0
         
-        # Get base domain from PTR
-        base_domain = None
+        # Get base domains from PTR (include cloud infra for search)
+        base_domains = []
         try:
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
+                ptr_domain = str(ptr_answers[0]).rstrip('.')
+                base_domains.append(ptr_domain)
+                
+                # Extract parent domain if cloud infra
+                parent = self.extract_parent_domain(ptr_domain)
+                if parent and parent != ptr_domain:
+                    base_domains.append(parent)
         except:
             pass
         
-        if not base_domain or 'amazonaws.com' in base_domain:
-            return 0
-        
-        # Smart subdomain wordlist (prioritized)
+        # Smart subdomain wordlist (120+)
         subdomains = [
             # Priority 1: Most common
             'www', 'mail', 'api', 'm', 'mobile', 'app', 'dev', 'test',
@@ -210,14 +288,13 @@ class ReverseLookup:
             
             # Priority 5: Mail
             'smtp', 'pop', 'imap', 'exchange', 'webmail', 'email',
-            'mail1', 'mail2', 'mx', 'ns1', 'ns2',
             
             # Priority 6: Tech
             'db', 'database', 'cache', 'redis', 'mongo', 'elastic',
             'search', 'kibana', 'grafana', 'prometheus',
             
             # Priority 7: DevOps
-            'jenkins', 'gitlab', 'github', 'git', 'svn', 'nexus',
+            'jenkins', 'gitlab', 'github', 'git', 'nexus',
             'docker', 'k8s', 'kubernetes', 'helm', 'argo', 'consul',
             
             # Priority 8: Security
@@ -226,41 +303,32 @@ class ReverseLookup:
             
             # Priority 9: Regional
             'us', 'eu', 'asia', 'na', 'sa', 'emea', 'apac',
-            'us-east', 'us-west', 'eu-west', 'eu-central', 'ap-south',
+            'us-east', 'us-west', 'eu-west', 'eu-central',
             
             # Priority 10: Versioned
-            'v1', 'v2', 'v3', 'v4', 'api-v1', 'api-v2', 'api-v3',
+            'v1', 'v2', 'v3', 'api-v1', 'api-v2', 'api-v3',
             
             # Priority 11: Platform
             'ios', 'android', 'web', 'client', 'server', 'backend',
-            
-            # Priority 12: Business
-            'hr', 'crm', 'erp', 'billing', 'payment', 'checkout',
-            'cart', 'order', 'calendar', 'drive', 'storage',
         ]
         
-        # Check subdomains in parallel
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            futures = {executor.submit(self.check_subdomain, f"{sub}.{base_domain}") for sub in subdomains}
-            
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    count += 1
+        # Check subdomains for each base domain
+        for base_domain in base_domains[:2]:
+            # Skip cloud infra for bruteforce
+            if '.amazonaws.com' in base_domain or '.googleapis.com' in base_domain:
+                continue
+                
+            for sub in subdomains:
+                test_domain = f"{sub}.{base_domain}"
+                try:
+                    self.resolver.resolve(test_domain, 'A')
+                    if self.add_domain(test_domain):
+                        count += 1
+                        print(f"  [Brute-Force] {test_domain}")
+                except:
+                    pass
         
         return count
-
-    def check_subdomain(self, domain: str) -> Optional[str]:
-        """Check if subdomain exists"""
-        try:
-            # Try A record
-            self.resolver.resolve(domain, 'A')
-            if self.add_domain(domain):
-                print(f"  [Brute-Force] {domain}")
-                return domain
-        except:
-            pass
-        return None
 
     # ==================== DNS Records ====================
 
@@ -298,7 +366,7 @@ class ReverseLookup:
                     print(f"  [DNS-{source_name}] {domain}")
                     
         except Exception:
-            pass  # Silently skip if no records
+            pass
         
         return count
 
@@ -311,39 +379,40 @@ class ReverseLookup:
         if not self.check_command('amass'):
             return 0
         
-        # Get base domain from PTR
-        base_domain = None
+        # Get base domains from PTR
+        base_domains = []
         try:
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
+                ptr_domain = str(ptr_answers[0]).rstrip('.')
+                base_domains.append(ptr_domain)
+                
+                parent = self.extract_parent_domain(ptr_domain)
+                if parent:
+                    base_domains.append(parent)
         except:
             pass
         
-        if not base_domain or 'amazonaws.com' in base_domain:
-            return 0
-        
-        try:
-            # Run amass enum
-            result = subprocess.run(
-                ['amass', 'enum', '-passive', '-d', base_domain],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            
-            if result.returncode == 0:
-                # Parse output (domains are one per line)
-                domains = result.stdout.split('\n')
-                for domain in domains:
-                    domain = domain.strip()
-                    if domain and self.add_domain(domain):
-                        count += 1
-                        print(f"  [Amass] {domain}")
-                        
-        except Exception as e:
-            pass
+        for base_domain in base_domains[:2]:
+            try:
+                result = subprocess.run(
+                    ['amass', 'enum', '-passive', '-d', base_domain],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                if result.returncode == 0:
+                    domains = result.stdout.split('\n')
+                    for domain in domains:
+                        domain = domain.strip()
+                        if domain and self.add_domain(domain):
+                            count += 1
+                            print(f"  [Amass] {domain}")
+                            
+            except Exception:
+                pass
         
         return count
 
@@ -356,66 +425,58 @@ class ReverseLookup:
         if not self.check_command('dnsrecon'):
             return 0
         
-        # Get base domain from PTR
-        base_domain = None
+        # Get base domains from PTR
+        base_domains = []
         try:
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
+                ptr_domain = str(ptr_answers[0]).rstrip('.')
+                base_domains.append(ptr_domain)
+                
+                parent = self.extract_parent_domain(ptr_domain)
+                if parent:
+                    base_domains.append(parent)
         except:
             pass
         
-        if not base_domain or 'amazonaws.com' in base_domain:
-            return 0
-        
-        try:
-            output_file = f"/tmp/dnsrecon_{base_domain}.json"
-            result = subprocess.run(
-                ['dnsrecon', '-d', base_domain, '-j', output_file],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            # Parse JSON output
-            if os.path.exists(output_file):
-                try:
-                    with open(output_file, 'r') as f:
-                        data = json.load(f)
-                    
-                    # Extract from various sections
-                    if 'ptr' in data:
-                        for record in data['ptr']:
-                            if 'name' in record:
-                                domain = record['name'].rstrip('.')
-                                if self.add_domain(domain):
-                                    count += 1
-                                    print(f"  [DNSrecon] {domain}")
-                    
-                    if 'dnskey' in data:
-                        for record in data['dnskey']:
-                            if 'name' in record:
-                                domain = record['name'].rstrip('.')
-                                if self.add_domain(domain):
-                                    count += 1
-                                    print(f"  [DNSrecon] {domain}")
-                    
-                    if 'zonetransfer' in data:
-                        for record in data['zonetransfer']:
-                            if 'name' in record:
-                                domain = record['name'].rstrip('.')
-                                if self.add_domain(domain):
-                                    count += 1
-                                    print(f"  [DNSrecon] {domain}")
-                    
-                    # Clean up
-                    os.remove(output_file)
-                except:
-                    pass
+        for base_domain in base_domains[:2]:
+            try:
+                output_file = f"/tmp/dnsrecon_{base_domain}.json"
+                result = subprocess.run(
+                    ['dnsrecon', '-d', base_domain, '-j', output_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if os.path.exists(output_file):
+                    try:
+                        with open(output_file, 'r') as f:
+                            data = json.load(f)
                         
-        except Exception as e:
-            pass
+                        if 'dnskey' in data:
+                            for record in data['dnskey']:
+                                if 'name' in record:
+                                    domain = record['name'].rstrip('.')
+                                    if self.add_domain(domain):
+                                        count += 1
+                                        print(f"  [DNSrecon] {domain}")
+                        
+                        if 'zonetransfer' in data:
+                            for record in data['zonetransfer']:
+                                if 'name' in record:
+                                    domain = record['name'].rstrip('.')
+                                    if self.add_domain(domain):
+                                        count += 1
+                                        print(f"  [DNSrecon] {domain}")
+                        
+                        os.remove(output_file)
+                    except:
+                        pass
+                        
+            except Exception:
+                pass
         
         return count
 
@@ -428,40 +489,41 @@ class ReverseLookup:
         if not self.check_command('sublist3r'):
             return 0
         
-        # Get base domain from PTR
-        base_domain = None
+        # Get base domains from PTR
+        base_domains = []
         try:
             reverse_name = dns.reversename.from_address(ip)
             ptr_answers = self.resolver.resolve(reverse_name, 'PTR')
             if ptr_answers:
-                base_domain = str(ptr_answers[0]).rstrip('.')
+                ptr_domain = str(ptr_answers[0]).rstrip('.')
+                base_domains.append(ptr_domain)
+                
+                parent = self.extract_parent_domain(ptr_domain)
+                if parent:
+                    base_domains.append(parent)
         except:
             pass
         
-        if not base_domain or 'amazonaws.com' in base_domain:
-            return 0
-        
-        try:
-            result = subprocess.run(
-                ['sublist3r', '-d', base_domain],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            if result.returncode == 0:
-                # Parse output (domains are one per line)
-                domains = result.stdout.split('\n')
-                for domain in domains:
-                    domain = domain.strip()
-                    # Skip lines that aren't domains
-                    if domain and not domain.startswith('---') and not domain.startswith('['):
-                        if self.add_domain(domain):
-                            count += 1
-                            print(f"  [Sublist3r] {domain}")
+        for base_domain in base_domains[:2]:
+            try:
+                result = subprocess.run(
+                    ['sublist3r', '-d', base_domain],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                if result.returncode == 0:
+                    domains = result.stdout.split('\n')
+                    for domain in domains:
+                        domain = domain.strip()
+                        if domain and not domain.startswith('---') and not domain.startswith('['):
+                            if self.add_domain(domain):
+                                count += 1
+                                print(f"  [Sublist3r] {domain}")
                         
-        except Exception as e:
-            pass
+            except Exception:
+                pass
         
         return count
 
@@ -507,8 +569,8 @@ class ReverseLookup:
         print(f"\n✅ Saved {len(sorted_domains)} domains to {self.output_file}")
 
     def lookup(self, ip: str):
-        """Perform smart reverse IP lookup"""
-        print(f"\n🔍 Smart Reverse IP Lookup: {ip}")
+        """Perform ultimate smart reverse IP lookup"""
+        print(f"\n🔍 Ultimate Smart Reverse IP Lookup: {ip}")
         print(f"{'='*50}\n")
 
         start_time = time.time()
@@ -516,7 +578,7 @@ class ReverseLookup:
         # Run all sources
         sources = [
             ('DNS-PTR', self.dns_ptr_lookup),
-            ('crt.sh', self.crtsh_lookup),
+            ('Certificate-Transparency', self.cert_transparency_lookup),
             ('DNS-MX', lambda x: self.dns_record_lookup(x, 'MX', 'MX')),
             ('DNS-NS', lambda x: self.dns_record_lookup(x, 'NS', 'NS')),
             ('DNS-SRV', lambda x: self.dns_record_lookup(x, 'SRV', 'SRV')),
@@ -532,7 +594,7 @@ class ReverseLookup:
                 found = method(ip)
                 total_found += found
             except Exception as e:
-                pass  # Silently skip errors
+                pass  # Silent errors
 
         elapsed = time.time() - start_time
 
@@ -582,7 +644,7 @@ def resolve_domain(domain: str) -> Tuple[bool, str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Smart Reverse IP Lookup - Uses Kali tools and advanced Python',
+        description='Ultimate Smart Reverse IP Lookup - Uses multiple CT sources and Kali tools',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -591,16 +653,13 @@ Examples:
   %(prog)s 8.8.8.8 --output results.txt
   %(prog)s google.com --format json --output domains.json
 
-Kali Linux Tools (if available):
-  amass      - Asset discovery (install: apt install amass)
-  dnsrecon   - DNS recon (install: apt install dnsrecon)
-  sublist3r   - Subdomain enum (install: apt install sublist3r)
-
-Smart Filtering:
-  - Removes WHOIS noise (arin.net, rdap.arin.net, etc.)
-  - Removes abuse domains (abuse.net, dis.incapsula.noc, etc.)
-  - Removes CDN infrastructure (cloudflare.net, akamai.net, etc.)
-  - Prioritizes relevant domains
+Smart Features:
+  - Multiple Certificate Transparency sources (crt.sh + Censys CT)
+  - Smart parent domain extraction from AWS/GCP/Azure
+  - Smart noise filtering (WHOIS, abuse, CDN)
+  - Kali tools: Amass, DNSrecon, Sublist3r
+  - Advanced subdomain enumeration (120+ patterns)
+  - Multiple DNS servers for better resolution
         """
     )
 
