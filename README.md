@@ -170,8 +170,9 @@ python main.py dialog.lk
 1. **Input**: IP address or domain name
 2. **Resolution**: If domain, resolves to IP
 3. **DNS Queries**: PTR, MX, NS, SRV lookups
-4. **Certificate Transparency**: Queries crt.sh for SSL certificates
-5. **Subdomain Bruteforce**: Tests 90+ prioritized subdomains in parallel (30 threads)
+4. **Certificate Transparency**: Queries crt.sh and Censys CT for SSL certificates
+5. **Cloud Domain Extraction**: Extracts parent domains from AWS/GCP/Azure PTR records
+6. **Subdomain Bruteforce**: Tests 120+ prioritized subdomains in parallel (30 threads)
 6. **Kali Tools**: Runs Amass, DNSrecon, Sublist3r if available
 7. **Smart Filtering**: Removes noise and irrelevant domains
 8. **Aggregation**: Collects all unique, relevant domains
@@ -215,7 +216,7 @@ hr, crm, erp, billing, payment, checkout, cart, order, calendar, drive, storage,
 ## Performance
 
 - **DNS lookups**: Fast (0.5-2 seconds)
-- **Certificate Transparency**: Medium (5-15 seconds)
+- **Certificate Transparency**: Medium (8-25 seconds for 2 sources)
 - **Parallel Bruteforce**: Fast (5-15 seconds for 90+ subdomains)
 - **Amass**: Slow (30-120 seconds - very comprehensive)
 - **DNSrecon**: Medium (20-60 seconds)
@@ -252,6 +253,10 @@ hr, crm, erp, billing, payment, checkout, cart, order, calendar, drive, storage,
 - **Deep scan**: Add Amass + DNSrecon + Sublist3r
 - **Smart filtering**: Automatically removes noise domains
 - **Parallel processing**: Bruteforce uses 30 threads for speed
+
+## Certificate Transparency
+
+For detailed information about Certificate Transparency sources, see [CT_SOURCES.md](CT_SOURCES.md).
 
 ## Troubleshooting
 
