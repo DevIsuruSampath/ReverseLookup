@@ -25,25 +25,28 @@ class ReverseLookup:
         self.output_format = output_format
         
         # Initialize DNS resolver with Termux compatibility
-        self.resolver = dns.resolver.Resolver()
-        self.resolver.timeout = 5
-        self.resolver.lifetime = 10
-        
-        # Configure DNS servers for Termux compatibility
-        # Try to read resolv.conf, fallback to public DNS
+        # Try to create resolver, catch Termux resolv.conf error
         try:
-            self.resolver.read_resolv_conf()
-        except:
-            # Fallback to public DNS servers (works on Termux)
+            self.resolver = dns.resolver.Resolver()
+            self.resolver.timeout = 5
+            self.resolver.lifetime = 10
+        except dns.resolver.NoResolverConfiguration:
+            # Termux/Android compatibility - manually create resolver
+            self.resolver = dns.resolver.Resolver(configure=False)
+            self.resolver.timeout = 5
+            self.resolver.lifetime = 10
+            # Use public DNS servers
             self.resolver.nameservers = ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1']
 
     def add_domain(self, domain: str) -> bool:
         """Add domain if not duplicate"""
         if domain and '.' in domain and len(domain) > 3:
             clean = domain.lower().strip()
-            if clean not in self.domains:
-                self.domains.add(clean)
-                return True
+            # Filter out arpa domains and invalid patterns
+            if 'in-addr.arpa' not in clean and 'ip6.arpa' not in clean:
+                if clean not in self.domains:
+                    self.domains.add(clean)
+                    return True
         return False
 
     # ==================== DNS PTR Lookup ====================
@@ -326,7 +329,9 @@ class ReverseLookup:
             '_ldap._tcp', '_ldaps._tcp', '_kerberos._tcp', '_kerberos._udp',
             '_kpasswd._tcp', '_kpasswd._udp', '_imap._tcp', '_imaps._tcp',
             '_pop3._tcp', '_pop3s._tcp', '_smtp._tcp', '_submission._tcp',
-            '_ftp._tcp', '_ftps._tcp', '_http._tcp', '_https._tcp'
+            '_ftp._tcp', '_ftps._tcp', '_http._tcp', '_https._tcp',
+            '_caldav._tcp', '_carddav._tcp', '_caldavs._tcp', '_carddavs._tcp',
+            '_git._tcp', '_ssh._tcp', '_telnet._tcp', '_ws._tcp', '_wss._tcp'
         ]
         
         for service in srv_services:
@@ -385,6 +390,7 @@ class ReverseLookup:
             ('DNS-PTR', self.dns_ptr_lookup),
             ('Host', self.host_command),
             ('Nslookup', self.nslookup_command),
+            ('Dig', self.dig_command),
             ('DNS-MX', self.dns_mx_lookup),
             ('DNS-NS', self.dns_ns_lookup),
             ('DNS-TXT', self.dns_txt_lookup),
@@ -459,6 +465,7 @@ Examples:
 
 Note: This version uses ONLY DNS queries and system tools.
 No external data sources or APIs are used.
+Fully compatible with Termux on Android.
         """
     )
 
